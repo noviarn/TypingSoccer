@@ -13,10 +13,17 @@ final class PlayerNode: SKNode {
     let team: Team
     let role: PlayerRole
     let baseSpeed: CGFloat
+    /// Real player name (World Cup mode); shown under the circle and in the
+    /// stat panels. Nil = generic dummy player.
+    let playerName: String?
 
     private(set) var hasBall = false
     private(set) var isSlowed = false
     private var slowRemaining: TimeInterval = 0
+
+    // Energy / stamina. Drains while running, regenerates while resting.
+    private(set) var energy: CGFloat = GameConfig.energyMax
+    private var movedThisFrame = false
 
     private let body = SKShapeNode()
     private let ring = SKShapeNode()   // highlight ring when carrying the ball
@@ -32,13 +39,42 @@ final class PlayerNode: SKNode {
         return false
     }
 
-    /// Current effective speed after any slow penalty.
-    var currentSpeed: CGFloat { isSlowed ? baseSpeed * GameConfig.slowMultiplier : baseSpeed }
+    /// Current effective speed after any slow penalty, ball-carry penalty
+    /// and energy fatigue (an exhausted player runs at half pace).
+    var currentSpeed: CGFloat {
+        var speed = baseSpeed
+        if isSlowed { speed *= GameConfig.slowMultiplier }
+        if hasBall { speed *= GameConfig.ballCarryMultiplier }  // slower while carrying
+        let minF = GameConfig.energyMinSpeedFactor
+        speed *= minF + (1 - minF) * (energy / GameConfig.energyMax)
+        return speed
+    }
 
-    init(team: Team, role: PlayerRole, baseSpeed: CGFloat) {
+    // MARK: Energy
+
+    /// Partial recovery at a half-time / extra-time break.
+    func restoreEnergy(_ amount: CGFloat) {
+        energy = min(GameConfig.energyMax, energy + amount)
+    }
+
+    /// Call once per frame AFTER movement: drains if the player actually ran
+    /// this frame, otherwise regenerates. Carrying the ball drains faster.
+    func tickEnergy(deltaTime dt: TimeInterval) {
+        if movedThisFrame {
+            let drain = hasBall ? GameConfig.energyCarrierDrainPerSecond
+                                : GameConfig.energyDrainPerSecond
+            energy = max(0, energy - drain * CGFloat(dt))
+        } else {
+            energy = min(GameConfig.energyMax, energy + GameConfig.energyRegenPerSecond * CGFloat(dt))
+        }
+        movedThisFrame = false
+    }
+
+    init(team: Team, role: PlayerRole, baseSpeed: CGFloat, playerName: String? = nil) {
         self.team = team
         self.role = role
         self.baseSpeed = baseSpeed
+        self.playerName = playerName
         super.init()
         makeBody()
     }
@@ -72,6 +108,17 @@ final class PlayerNode: SKNode {
         label.fontColor = .white
         label.verticalAlignmentMode = .center
         addChild(label)
+
+        // Real name under the circle (World Cup mode only).
+        if let playerName {
+            let name = SKLabelNode(text: playerName)
+            name.fontName = "Menlo-Bold"
+            name.fontSize = 9
+            name.fontColor = SKColor(white: 0.85, alpha: 0.9)
+            name.verticalAlignmentMode = .top
+            name.position = CGPoint(x: 0, y: -r - 7)
+            addChild(name)
+        }
     }
 
     private func labelText() -> String {
@@ -112,12 +159,15 @@ final class PlayerNode: SKNode {
     }
 
     /// Move this player toward `point` at its current speed for `dt` seconds.
-    func move(toward point: CGPoint, deltaTime dt: TimeInterval) {
+    /// `speedScale` temporarily scales the speed (e.g. 0.5 while retreating from
+    /// an offside position).
+    func move(toward point: CGPoint, deltaTime dt: TimeInterval, speedScale: CGFloat = 1) {
         let dx = point.x - position.x
         let dy = point.y - position.y
         let dist = hypot(dx, dy)
         guard dist > 1 else { return }
-        let step = currentSpeed * CGFloat(dt)
+        movedThisFrame = true
+        let step = currentSpeed * speedScale * CGFloat(dt)
         if step >= dist {
             position = point
         } else {

@@ -22,6 +22,7 @@
 		0F438BF3FF8FBACD8D107F7F /* TypingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 180288B0590B84188551F580 /* TypingController.swift */; };
 		136C16E3C2699B09FA6706BD /* TypingSoccerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1F8B13BA419C461634F20C /* TypingSoccerApp.swift */; };
 		5F13827CB52032D1A17E8031 /* WordProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACEBBF34CB8F22C885A89F4 /* WordProvider.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* WorldCupTeams.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5D6E7F8091A2B3C4D5E6F70 /* WorldCupTeams.swift */; };
 		40D6D858E32C16BCCF5AD580 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0BFF27C7E987F9099D6AED79 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -41,6 +42,7 @@
 		180288B0590B84188551F580 /* TypingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TypingController.swift"; sourceTree = "<group>"; };
 		EE1F8B13BA419C461634F20C /* TypingSoccerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TypingSoccerApp.swift"; sourceTree = "<group>"; };
 		FACEBBF34CB8F22C885A89F4 /* WordProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WordProvider.swift"; sourceTree = "<group>"; };
+		C5D6E7F8091A2B3C4D5E6F70 /* WorldCupTeams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorldCupTeams.swift"; sourceTree = "<group>"; };
 		0BFF27C7E987F9099D6AED79 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
 		04C165BFC61BB770D0529EA7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
 		B050C4175D2B4A5D44C9DF00 /* TypingSoccer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "TypingSoccer.entitlements"; sourceTree = "<group>"; };
@@ -92,6 +94,7 @@
 				180288B0590B84188551F580 /* TypingController.swift */,
 				EE1F8B13BA419C461634F20C /* TypingSoccerApp.swift */,
 				FACEBBF34CB8F22C885A89F4 /* WordProvider.swift */,
+				C5D6E7F8091A2B3C4D5E6F70 /* WorldCupTeams.swift */,
 				0BFF27C7E987F9099D6AED79 /* Assets.xcassets */,
 				04C165BFC61BB770D0529EA7 /* Info.plist */,
 				B050C4175D2B4A5D44C9DF00 /* TypingSoccer.entitlements */,
@@ -183,6 +186,7 @@
 				0F438BF3FF8FBACD8D107F7F /* TypingController.swift in Sources */,
 				136C16E3C2699B09FA6706BD /* TypingSoccerApp.swift in Sources */,
 				5F13827CB52032D1A17E8031 /* WordProvider.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* WorldCupTeams.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

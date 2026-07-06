@@ -28,6 +28,21 @@ struct WordProvider {
         "tournament", "breakaway", "playmaker", "equalizer"
     ]
 
+    /// Longer words (8–12 letters) reserved for the final shot duel vs the keeper.
+    private static let longWords = [
+        "midfielder", "possession", "goalkeeper", "substitute", "tournament",
+        "equalizer", "playmaker", "breakaway", "defenders", "formation",
+        "crossbar", "teammates", "stoppage", "penalties", "overhead",
+        "champions", "attacking", "defensive", "finishing", "celebration",
+        "interception", "substitution", "championship"
+    ]
+
+    /// A long word (8–12 letters) for the make-or-break shot on goal.
+    static func shotWord() -> String {
+        let pool = longWords.filter { $0.count >= 8 && $0.count <= 12 }
+        return pool.randomElement() ?? "goalkeeper"
+    }
+
     /// Returns a word appropriate for the current situation.
     /// `intensity` 0…1 nudges toward harder words (e.g. near the goal).
     static func word(intensity: Double = 0.3) -> String {
