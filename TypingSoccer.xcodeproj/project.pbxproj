@@ -1,0 +1,299 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		9BE6AFB43D08EAB408380474 /* AIOpponent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B11B4CCBE00E606A1999B6 /* AIOpponent.swift */; };
+		2BEF603C40B6394B085C87B1 /* BallNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54BD12EE5D9EAD8A52BA2157 /* BallNode.swift */; };
+		BBAED6B4058B0C57B8519749 /* FieldBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA7F96FF4082E34B45CCC89C /* FieldBuilder.swift */; };
+		C7583F8975F3E34C3D0E0C5F /* GameCenterManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 555FFBFCA777BBAFA073BEF9 /* GameCenterManager.swift */; };
+		AE8B0B26842A628F5AFCA23C /* GameConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7E64FAE0A92CF7291DD8EF8 /* GameConfig.swift */; };
+		41D3F9CCFF07E61603E8DCD4 /* GameModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1583528AA6768345ECDD8B5 /* GameModels.swift */; };
+		BA8BFE575951459BB1EC6CF6 /* GameScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90E03F21D2F518D6728E91D /* GameScene.swift */; };
+		2CB109B9799F2B099BAE195E /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABBDCBC89F14149BDAD3D28 /* GameView.swift */; };
+		CB90BD211DF5ED65BF2E30D2 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7824C4E51B47CC9732FE374B /* HUD.swift */; };
+		27B76FF2C077A231855CE7D0 /* MatchFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E93A0C8C2FEEB33805F25F /* MatchFeedback.swift */; };
+		8159CD535141F3DE279DB996 /* MultipeerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8177B44BB6108C98A5AEF74 /* MultipeerManager.swift */; };
+		B590DFF657FD54743E9BA7E3 /* PlayerNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D973C226E34EE9D5B65375A /* PlayerNode.swift */; };
+		0F438BF3FF8FBACD8D107F7F /* TypingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 180288B0590B84188551F580 /* TypingController.swift */; };
+		136C16E3C2699B09FA6706BD /* TypingSoccerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1F8B13BA419C461634F20C /* TypingSoccerApp.swift */; };
+		5F13827CB52032D1A17E8031 /* WordProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACEBBF34CB8F22C885A89F4 /* WordProvider.swift */; };
+		40D6D858E32C16BCCF5AD580 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0BFF27C7E987F9099D6AED79 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		53B11B4CCBE00E606A1999B6 /* AIOpponent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AIOpponent.swift"; sourceTree = "<group>"; };
+		54BD12EE5D9EAD8A52BA2157 /* BallNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BallNode.swift"; sourceTree = "<group>"; };
+		DA7F96FF4082E34B45CCC89C /* FieldBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FieldBuilder.swift"; sourceTree = "<group>"; };
+		555FFBFCA777BBAFA073BEF9 /* GameCenterManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameCenterManager.swift"; sourceTree = "<group>"; };
+		F7E64FAE0A92CF7291DD8EF8 /* GameConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameConfig.swift"; sourceTree = "<group>"; };
+		D1583528AA6768345ECDD8B5 /* GameModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameModels.swift"; sourceTree = "<group>"; };
+		C90E03F21D2F518D6728E91D /* GameScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameScene.swift"; sourceTree = "<group>"; };
+		AABBDCBC89F14149BDAD3D28 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameView.swift"; sourceTree = "<group>"; };
+		7824C4E51B47CC9732FE374B /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HUD.swift"; sourceTree = "<group>"; };
+		63E93A0C8C2FEEB33805F25F /* MatchFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MatchFeedback.swift"; sourceTree = "<group>"; };
+		F8177B44BB6108C98A5AEF74 /* MultipeerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MultipeerManager.swift"; sourceTree = "<group>"; };
+		5D973C226E34EE9D5B65375A /* PlayerNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PlayerNode.swift"; sourceTree = "<group>"; };
+		180288B0590B84188551F580 /* TypingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TypingController.swift"; sourceTree = "<group>"; };
+		EE1F8B13BA419C461634F20C /* TypingSoccerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TypingSoccerApp.swift"; sourceTree = "<group>"; };
+		FACEBBF34CB8F22C885A89F4 /* WordProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WordProvider.swift"; sourceTree = "<group>"; };
+		0BFF27C7E987F9099D6AED79 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		04C165BFC61BB770D0529EA7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+		B050C4175D2B4A5D44C9DF00 /* TypingSoccer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "TypingSoccer.entitlements"; sourceTree = "<group>"; };
+		71CCD365E3A654DA84DBA191 /* TypingSoccer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "TypingSoccer.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6BC9136C2E1B992EF374A2EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		8D3FC6DB5D0827F168A73277 = {
+			isa = PBXGroup;
+			children = (
+				BB02FE6C4678B79B215868AF /* TypingSoccer */,
+				1BADDC1D73C1A20F347483E1 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		1BADDC1D73C1A20F347483E1 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				71CCD365E3A654DA84DBA191 /* TypingSoccer.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		BB02FE6C4678B79B215868AF /* TypingSoccer */ = {
+			isa = PBXGroup;
+			children = (
+				53B11B4CCBE00E606A1999B6 /* AIOpponent.swift */,
+				54BD12EE5D9EAD8A52BA2157 /* BallNode.swift */,
+				DA7F96FF4082E34B45CCC89C /* FieldBuilder.swift */,
+				555FFBFCA777BBAFA073BEF9 /* GameCenterManager.swift */,
+				F7E64FAE0A92CF7291DD8EF8 /* GameConfig.swift */,
+				D1583528AA6768345ECDD8B5 /* GameModels.swift */,
+				C90E03F21D2F518D6728E91D /* GameScene.swift */,
+				AABBDCBC89F14149BDAD3D28 /* GameView.swift */,
+				7824C4E51B47CC9732FE374B /* HUD.swift */,
+				63E93A0C8C2FEEB33805F25F /* MatchFeedback.swift */,
+				F8177B44BB6108C98A5AEF74 /* MultipeerManager.swift */,
+				5D973C226E34EE9D5B65375A /* PlayerNode.swift */,
+				180288B0590B84188551F580 /* TypingController.swift */,
+				EE1F8B13BA419C461634F20C /* TypingSoccerApp.swift */,
+				FACEBBF34CB8F22C885A89F4 /* WordProvider.swift */,
+				0BFF27C7E987F9099D6AED79 /* Assets.xcassets */,
+				04C165BFC61BB770D0529EA7 /* Info.plist */,
+				B050C4175D2B4A5D44C9DF00 /* TypingSoccer.entitlements */,
+			);
+			path = "TypingSoccer";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		42AEFBAE01D2DFD981F7DA7D /* TypingSoccer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EAF116FE40D68E4ABB26094B /* Build configuration list for PBXNativeTarget "TypingSoccer" */;
+			buildPhases = (
+				F680599402C0D80E245DE801 /* Sources */,
+				6BC9136C2E1B992EF374A2EA /* Frameworks */,
+				781C774F390DF12CD292A30B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "TypingSoccer";
+			productName = "TypingSoccer";
+			productReference = 71CCD365E3A654DA84DBA191 /* TypingSoccer.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		46F86FAA6BBF9AC94A7E4595 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					42AEFBAE01D2DFD981F7DA7D = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 56283EBD6DD86A56CED63937 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 8D3FC6DB5D0827F168A73277;
+			productRefGroup = 1BADDC1D73C1A20F347483E1 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				42AEFBAE01D2DFD981F7DA7D /* TypingSoccer */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		781C774F390DF12CD292A30B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				40D6D858E32C16BCCF5AD580 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F680599402C0D80E245DE801 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9BE6AFB43D08EAB408380474 /* AIOpponent.swift in Sources */,
+				2BEF603C40B6394B085C87B1 /* BallNode.swift in Sources */,
+				BBAED6B4058B0C57B8519749 /* FieldBuilder.swift in Sources */,
+				C7583F8975F3E34C3D0E0C5F /* GameCenterManager.swift in Sources */,
+				AE8B0B26842A628F5AFCA23C /* GameConfig.swift in Sources */,
+				41D3F9CCFF07E61603E8DCD4 /* GameModels.swift in Sources */,
+				BA8BFE575951459BB1EC6CF6 /* GameScene.swift in Sources */,
+				2CB109B9799F2B099BAE195E /* GameView.swift in Sources */,
+				CB90BD211DF5ED65BF2E30D2 /* HUD.swift in Sources */,
+				27B76FF2C077A231855CE7D0 /* MatchFeedback.swift in Sources */,
+				8159CD535141F3DE279DB996 /* MultipeerManager.swift in Sources */,
+				B590DFF657FD54743E9BA7E3 /* PlayerNode.swift in Sources */,
+				0F438BF3FF8FBACD8D107F7F /* TypingController.swift in Sources */,
+				136C16E3C2699B09FA6706BD /* TypingSoccerApp.swift in Sources */,
+				5F13827CB52032D1A17E8031 /* WordProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		FA9139DD8B03E3F922556BF8 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		FFE2104CCFAB79205AC64460 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+			};
+			name = Release;
+		};
+		D8579749783A718541606A67 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "TypingSoccer/TypingSoccer.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HLSL_STRINGS = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "TypingSoccer/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.typingsoccer.app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		553194FECB7E1C4EBBAFB6CE = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "TypingSoccer/TypingSoccer.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HLSL_STRINGS = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "TypingSoccer/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.typingsoccer.app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		56283EBD6DD86A56CED63937 /* Build configuration list for PBXProject */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FA9139DD8B03E3F922556BF8 /* Debug */,
+				FFE2104CCFAB79205AC64460 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EAF116FE40D68E4ABB26094B /* Build configuration list for PBXNativeTarget */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D8579749783A718541606A67 /* Debug */,
+				553194FECB7E1C4EBBAFB6CE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+}
