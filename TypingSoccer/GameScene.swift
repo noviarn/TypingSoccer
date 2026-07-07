@@ -8,7 +8,8 @@
 //  goalkeeper → goal or miss → reset. Time-boxed match with a scoreboard.
 //
 //  Single-player: the rival side is driven by AIOpponent.
-//  Multiplayer:   the rival side is driven by MultipeerManager messages.
+//  Multiplayer:   the rival seats are driven by GameKitMatchManager
+//  messages; a seat whose human quits mid-match is taken over by the AI.
 //
 
 import SpriteKit
@@ -40,7 +41,7 @@ final class GameScene: SKScene {
 
     /// A mirroring joiner in a multiplayer match: renders and animates
     /// locally, but every game decision comes from the host.
-    private var isNetPeer: Bool { mode == .multipeer && !isNetworkHost }
+    private var isNetPeer: Bool { mode == .multiplayer && !isNetworkHost }
     /// Single-player or multiplayer host: allowed to make game decisions.
     private var isAuthority: Bool { !isNetPeer }
     /// Does this human control the three outfielders (vs the goalkeeper)?
@@ -134,6 +135,22 @@ final class GameScene: SKScene {
     // Duel bookkeeping
     private let typing = TypingController()
     private let ai = AIOpponent()
+
+    // AI takeover (multiplayer): seats whose human quit mid-match. The host
+    // simulates their typing with these two extra AI typists (one per side)
+    // and auto-plays their keeper distributions / free kicks.
+    private var aiSeats: Set<PeerSeat> = []
+    private let netAIHome = AIOpponent()
+    private let netAIAway = AIOpponent()
+    private var homeSideAI = false     // per-duel: this side is AI-typed
+    private var awaySideAI = false
+
+    // Pause (single player only). Freezes the update loop and all actions.
+    private(set) var isGamePaused = false
+
+    // Longest run of correct keystrokes (achievement tracking).
+    private var comboRun = 0
+
     private var duelKind: DuelKind = .kickoff
     private var duelAttacker: PlayerNode?     // carrier / shooter (nil for kickoff)
     private var duelDefender: PlayerNode?     // interceptor / goalkeeper
@@ -213,7 +230,7 @@ final class GameScene: SKScene {
         addChild(world)
 
         geometry = FieldBuilder.build(in: world, sceneSize: size)
-        hud = HUD(sceneSize: size)
+        hud = HUD(sceneSize: size, textScale: CGFloat(SettingsStore.shared.textScale))
         addChild(hud)
         if let home = homeTeam, let away = awayTeam {
             hud.setTeamNames(home: home.name, away: away.name)
@@ -435,7 +452,24 @@ final class GameScene: SKScene {
             // Away difficulty: keeper shots are a touch harder.
             let skill: Double = (kind == .shot && (defender?.team == .away)) ? 0.75 : 0.5
             ai.begin(word: word, skill: skill)
+        } else if isNetworkHost {
+            // AI takeover: any participating seat whose human quit is typed
+            // by the matching side's AI. (Host frame == wire frame.)
+            homeSideAI = false
+            awaySideAI = false
+            for seat in aiSeats where seatParticipates(seat) {
+                if seat.isHome { homeSideAI = true } else { awaySideAI = true }
+            }
+            if homeSideAI { netAIHome.begin(word: word, skill: 0.5) }
+            if awaySideAI { netAIAway.begin(word: word, skill: 0.5) }
         }
+    }
+
+    /// Is this node's controller a departed human replaced by the AI?
+    /// (Single player: the whole away team is the AI, as before.)
+    private func isAIControlled(_ node: PlayerNode) -> Bool {
+        if mode == .singlePlayer { return node.team == .away }
+        return isNetworkHost && aiSeats.contains(controllerSeat(of: node))
     }
 
     /// Shared duel setup — used by the authority directly and by the joiner
@@ -497,7 +531,7 @@ final class GameScene: SKScene {
     private func computeShotOutcome(winner: Team) -> ShotOutcome {
         let shooter = duelAttacker!
         let shooterMistyped = shooter.team == .home ? homeDuelMistyped
-                                                    : (mode == .multipeer && awayDuelMistyped)
+                                                    : (mode == .multiplayer && awayDuelMistyped)
         if winner != shooter.team {
             // Keeper was faster. In open play a mistype still means "wide";
             // in the shootout the save stands regardless.
@@ -534,8 +568,13 @@ final class GameScene: SKScene {
                              mistakes: typing.mistakes)
             if winner == .home { homeStats.duelsWon += 1 } else { homeStats.duelsLost += 1 }
         }
+        recordShotStats(outcome: outcome)
         defer {
             ai.reset()
+            netAIHome.reset()
+            netAIAway.reset()
+            homeSideAI = false
+            awaySideAI = false
             typing.reset()
         }
 
@@ -575,6 +614,21 @@ final class GameScene: SKScene {
             case .wide:  shootBall(scored: false, shooter: shooter)
             case .saved: keeperCatch(keeper: gk, shooter: shooter)
             }
+        }
+    }
+
+    /// Book penalty-area shot / keeper-save stats for the LOCAL human when a
+    /// shot duel resolves. Shot accuracy counts open-play penalty-area shots
+    /// only; saves count every final battle played while controlling the GK.
+    private func recordShotStats(outcome: ShotOutcome?) {
+        guard duelKind == .shot, let outcome else { return }
+        if stage != .shootout, let shooter = duelAttacker, localControls(shooter) {
+            homeStats.shotsTaken += 1
+            if outcome == .goal { homeStats.shotsScored += 1 }
+        }
+        if let gk = duelDefender, gk.isGoalkeeper, localControls(gk) {
+            homeStats.savesFaced += 1
+            if outcome == .saved { homeStats.savesMade += 1 }
         }
     }
 
@@ -911,7 +965,8 @@ final class GameScene: SKScene {
             self.carrierMustPass = true    // set BEFORE setCarrier so the broadcast carries it
             self.setCarrier(gk)
             self.beginRunning()
-            if self.mode == .singlePlayer && gk.team == .away {
+            // AI keeper (single-player rival, or a quit seat's GK): lay it off.
+            if self.isAuthority && self.isAIControlled(gk) {
                 self.run(.sequence([.wait(forDuration: 0.8), .run { [weak self] in
                     self?.aiFreeKickPass()
                 }]))
@@ -1022,6 +1077,11 @@ final class GameScene: SKScene {
     // MARK: Update loop
 
     override func update(_ currentTime: TimeInterval) {
+        // Paused (vs AI): keep the clock origin fresh so resuming doesn't jump.
+        if isGamePaused {
+            lastUpdate = currentTime
+            return
+        }
         let dt = lastUpdate == 0 ? 0 : min(currentTime - lastUpdate, 1.0 / 20.0)
         lastUpdate = currentTime
 
@@ -1173,8 +1233,17 @@ final class GameScene: SKScene {
             let total = typing.target.count
             let enemyCount = min(total, Int(Double(total) * ai.progress))
             hud.updateEnemyProgress(word: typing.target, typedCount: enemyCount)
+        } else if isNetworkHost {
+            // Multiplayer AI takeover: type for any side whose human quit.
+            if homeSideAI, netAIHome.update(deltaTime: dt) { homeDuelDone = true }
+            if awaySideAI {
+                if netAIAway.update(deltaTime: dt) { awayDuelDone = true }
+                let total = typing.target.count
+                hud.updateEnemyProgress(word: typing.target,
+                                        typedCount: min(total, Int(Double(total) * netAIAway.progress)))
+            }
         }
-        // Multiplayer: home/away completion flags are set by the host's own
+        // Multiplayer: the other completion flags are set by the host's own
         // typing (when it participates) and by seat-tagged network messages.
 
         // Whoever finishes first wins. Ties on the same frame go to home
@@ -1537,8 +1606,9 @@ final class GameScene: SKScene {
             self.carrierMustPass = true        // must pass before advancing (set before the broadcast)
             self.setCarrier(taker)
             self.beginRunning()
-            // If the AI is taking it, have it lay the ball off after a beat.
-            if self.mode == .singlePlayer && defendingTeam == .away {
+            // If the AI is taking it (single-player rival, or a quit seat),
+            // have it lay the ball off after a beat.
+            if self.isAuthority && self.isAIControlled(taker) {
                 self.run(.sequence([.wait(forDuration: 0.8), .run { [weak self] in
                     self?.aiFreeKickPass()
                 }]))
@@ -1598,7 +1668,18 @@ final class GameScene: SKScene {
 
     // MARK: Keyboard input (the human's typing)
 
+    /// Pause / resume (single player only). Freezes movement, the clock and
+    /// every scheduled action; the SwiftUI overlay supplies the menu.
+    func setGamePaused(_ paused: Bool) {
+        guard mode == .singlePlayer, phase != .finished else { return }
+        isGamePaused = paused
+        world.isPaused = paused    // freezes SKActions on players/ball
+        hud?.isPaused = paused
+        self.isPaused = paused     // freezes scene-level .run sequences
+    }
+
     override func keyDown(with event: NSEvent) {
+        guard !isGamePaused else { return }
         // Left / right arrows cycle the formation (field players only).
         if mode == .singlePlayer || localIsField {
             if event.keyCode == 123 { cycleFormation(-1); return }   // ←
@@ -1624,8 +1705,16 @@ final class GameScene: SKScene {
         hud.showPrompt(typed: typing.typedPrefix, remaining: typing.remaining)
         if typing.mistakes > 0 { homeDuelMistyped = true }
 
+        // Combo: consecutive correct keystrokes across the whole match.
+        if typing.mistakes == mistakesBefore {
+            comboRun += 1
+            homeStats.bestCombo = max(homeStats.bestCombo, comboRun)
+        } else {
+            comboRun = 0
+        }
+
         // Stream live progress so rivals see the orange row fill in.
-        if mode == .multipeer, typing.typedPrefix.count > 0, !done {
+        if mode == .multiplayer, typing.typedPrefix.count > 0, !done {
             broadcast(.typingProgress(seat: localSeat.rawValue, count: typing.typedPrefix.count))
         }
 
@@ -1697,6 +1786,7 @@ final class GameScene: SKScene {
                              mistakes: typing.mistakes)
             if winner == .home { homeStats.duelsWon += 1 } else { homeStats.duelsLost += 1 }
         }
+        recordShotStats(outcome: .wide)
         ai.reset()
         typing.reset()
         hud.showToast(team == .home ? "MISTYPE — SHOT WIDE" : "RIVAL MISTYPE — WIDE")
@@ -1707,7 +1797,7 @@ final class GameScene: SKScene {
 
     /// Ship a message to the connected peer (no-op outside multiplayer).
     private func broadcast(_ message: PeerMessage) {
-        guard mode == .multipeer else { return }
+        guard mode == .multiplayer else { return }
         gameDelegate?.peerSend(message)
     }
 
@@ -1761,7 +1851,7 @@ final class GameScene: SKScene {
     /// Live rival typing progress (orange row under the word) — only shown
     /// for the OPPOSING team's typist, on every machine.
     func applyRemoteTypingProgress(seatRaw: Int, count: Int) {
-        guard mode == .multipeer, case .duel = phase,
+        guard mode == .multiplayer, case .duel = phase,
               let seat = PeerSeat(rawValue: seatRaw),
               localTeam(wireHome: seat.isHome) == .away else { return }
         hud.updateEnemyProgress(word: typing.target,
@@ -1779,13 +1869,13 @@ final class GameScene: SKScene {
     /// All machines: mirror a committed chase pick so local defender
     /// movement matches the host's sim.
     func applyRemoteChaseState(homeTeamWire: Bool, laneRaw: Int) {
-        guard mode == .multipeer, let lane = Lane(rawValue: laneRaw) else { return }
+        guard mode == .multiplayer, let lane = Lane(rawValue: laneRaw) else { return }
         chaseChoice[localTeam(wireHome: homeTeamWire)] = lane
     }
 
     /// Non-senders: a field player changed their team's formation.
     func applyRemoteFormationUpdate(homeTeamWire: Bool, raw: Int) {
-        guard mode == .multipeer, let f = Formation(rawValue: raw) else { return }
+        guard mode == .multiplayer, let f = Formation(rawValue: raw) else { return }
         if localTeam(wireHome: homeTeamWire) == .home {
             // Our field teammate changed OUR shape (keeper-client view).
             guard !localIsField else { return }
@@ -1937,9 +2027,45 @@ final class GameScene: SKScene {
         }
     }
 
-    /// The connection dropped mid-match: freeze play and wrap up.
+    /// HOST: a joiner quit mid-match — the AI takes over that seat and the
+    /// match plays on (the "vs AI adjustment" when a player leaves).
+    func seatDidDisconnect(seatRaw: Int) {
+        guard isNetworkHost, netReady, phase != .finished,
+              let seat = PeerSeat(rawValue: seatRaw), !aiSeats.contains(seat) else { return }
+        aiSeats.insert(seat)
+        broadcast(.seatWentAI(seat: seatRaw))
+        presentSeatWentAI(seat: seat)
+        // If that seat is mid-duel right now, spin up its AI typist at once.
+        if case .duel = phase, !duelResolved, seatParticipates(seat) {
+            if seat.isHome {
+                if !homeSideAI { homeSideAI = true; netAIHome.begin(word: typing.target, skill: 0.5) }
+            } else {
+                if !awaySideAI { awaySideAI = true; netAIAway.begin(word: typing.target, skill: 0.5) }
+            }
+        }
+        // If the departed seat's keeper is holding a must-pass ball, release it.
+        if carrierMustPass, let c = carrier, isAIControlled(c) {
+            run(.sequence([.wait(forDuration: 0.8), .run { [weak self] in
+                self?.aiFreeKickPass()
+            }]))
+        }
+    }
+
+    /// Joiners: the host announced a seat is now AI-run (display only).
+    func applyRemoteSeatAI(seatRaw: Int) {
+        guard isNetPeer, let seat = PeerSeat(rawValue: seatRaw) else { return }
+        presentSeatWentAI(seat: seat)
+    }
+
+    private func presentSeatWentAI(seat: PeerSeat) {
+        let side = localTeam(wireHome: seat.isHome) == .home ? "TEAMMATE" : "RIVAL"
+        hud?.showToast("\(side) \(seat.roleLabel) LEFT — AI TAKES OVER")
+    }
+
+    /// The HOST'S connection dropped mid-match (the sim can't continue):
+    /// freeze play and wrap up.
     func peerDidDisconnect() {
-        guard mode == .multipeer, netReady, phase != .finished else { return }
+        guard mode == .multiplayer, netReady, phase != .finished else { return }
         removeAllActions()
         hud.hidePrompt()
         hud.showStatus("PLAYER DISCONNECTED", fontSize: 36)
@@ -1976,8 +2102,21 @@ private extension CGPoint {
 }
 
 /// Lightweight audio using built-in macOS system sounds so the prototype
-/// makes noise without any bundled assets. Swap for real SFX later.
+/// makes noise without any bundled assets. Sounds are cached once instead
+/// of being re-created on every call, and the Settings volume slider is
+/// applied (0 mutes them entirely).
 enum Audio {
-    static func whistle() { NSSound(named: NSSound.Name("Submarine"))?.play() }
-    static func tick()    { NSSound(named: NSSound.Name("Tink"))?.play() }
+    private static let whistleSound = NSSound(named: NSSound.Name("Submarine"))
+    private static let tickSound = NSSound(named: NSSound.Name("Tink"))
+
+    private static func play(_ sound: NSSound?) {
+        let volume = Float(SettingsStore.shared.audioVolume)
+        guard volume > 0, let sound else { return }
+        sound.volume = volume
+        if sound.isPlaying { sound.stop() }
+        sound.play()
+    }
+
+    static func whistle() { play(whistleSound) }
+    static func tick()    { play(tickSound) }
 }

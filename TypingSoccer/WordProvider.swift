@@ -37,10 +37,12 @@ struct WordProvider {
         "interception", "substitution", "championship"
     ]
 
+    /// Pre-filtered once instead of on every shot (the list never changes).
+    private static let shotPool = longWords.filter { $0.count >= 8 && $0.count <= 12 }
+
     /// A long word (8–12 letters) for the make-or-break shot on goal.
     static func shotWord() -> String {
-        let pool = longWords.filter { $0.count >= 8 && $0.count <= 12 }
-        return pool.randomElement() ?? "goalkeeper"
+        shotPool.randomElement() ?? "goalkeeper"
     }
 
     /// Returns a word appropriate for the current situation.

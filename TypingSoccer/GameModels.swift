@@ -92,10 +92,11 @@ enum Formation: Int, CaseIterable, Equatable {
 /// Which mode the match is running in.
 enum MatchMode: Equatable {
     case singlePlayer       // away team driven by AIOpponent
-    case multipeer          // away team driven by a remote human via MultipeerManager
+    case multiplayer        // rival seats driven by remote humans via GameKitMatchManager
 }
 
-/// Per-player running tally, fed to Foundation Models for the end screen.
+/// Per-player running tally, fed to Foundation Models for the end screen
+/// and into the persistent profile / Game Center leaderboards.
 struct PlayerStats: Codable {
     var wordsCompleted = 0
     var totalKeystrokes = 0
@@ -105,6 +106,15 @@ struct PlayerStats: Codable {
     var goals = 0
     var fastestWordSeconds: Double? = nil
     var totalTypingSeconds = 0.0
+
+    // Shots: final duels this player took from the penalty area.
+    var shotsTaken = 0
+    var shotsScored = 0
+    // Keeper duty: final battles faced while this human controlled the GK.
+    var savesFaced = 0
+    var savesMade = 0
+    // Longest run of correct keystrokes without a mistake.
+    var bestCombo = 0
 
     /// Words-per-minute across the match (5 chars == 1 "word").
     var averageWPM: Double {
@@ -116,6 +126,27 @@ struct PlayerStats: Codable {
     var accuracy: Double {
         guard totalKeystrokes > 0 else { return 1 }
         return Double(totalKeystrokes - mistakes) / Double(totalKeystrokes)
+    }
+
+    /// Shot accuracy 0…1 (penalty-area shots only). Nil if no shots taken.
+    var shotAccuracy: Double? {
+        guard shotsTaken > 0 else { return nil }
+        return Double(shotsScored) / Double(shotsTaken)
+    }
+
+    /// Save percentage 0…1 (final battles as the keeper). Nil if none faced.
+    var savePercentage: Double? {
+        guard savesFaced > 0 else { return nil }
+        return Double(savesMade) / Double(savesFaced)
+    }
+
+    /// Single-game score used for the BEST SCORE leaderboard column.
+    var matchScore: Int {
+        goals * 500
+            + duelsWon * 100
+            + savesMade * 150
+            + Int(averageWPM.rounded()) * 20
+            + Int((accuracy * 100).rounded()) * 10
     }
 
     mutating func record(word: String, seconds: Double, mistakes m: Int) {
