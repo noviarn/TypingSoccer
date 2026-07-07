@@ -9,12 +9,13 @@
 
 import SwiftUI
 import SpriteKit
+import AppKit
 
 // MARK: - Coordinator
 
 @MainActor
 final class GameCoordinator: ObservableObject {
-
+    
     enum Screen {
         case menu
         case teamSelectionSingle
@@ -27,7 +28,7 @@ final class GameCoordinator: ObservableObject {
         case settings
         case howToPlay
     }
-
+    
     @Published var screen: Screen = .menu
     @Published var seatNames: [Int: String] = [:]       // lobby: seat raw → player name
     @Published var mySeat: Int? = nil                   // lobby: my claimed seat
@@ -36,7 +37,7 @@ final class GameCoordinator: ObservableObject {
     @Published var lobbyStatus = ""                     // matchmaking progress line
     @Published var isKeeperRole = false                 // in-match: hide the formation bar
     @Published var isGamePaused = false                 // vs AI pause overlay
-
+    
     // Host-side lobby bookkeeping (players are GameKit gamePlayerIDs).
     private var seatOwners: [Int: String] = [:]         // claimed seats (joiners only)
     private var awayFieldTeamID: String? = nil
@@ -53,31 +54,31 @@ final class GameCoordinator: ObservableObject {
     @Published var homeStats: PlayerStats? = nil   // stats for the results screen
     @Published var coachRequested = false          // has the coach note been asked for?
     @Published var homeFormation: Formation = .oneTwo   // persists across matches
-
+    
     // World Cup team selection. In single player both pickers apply; in
     // multiplayer YOUR TEAM is yours and the rival's pick arrives over the
     // wire during the lobby handshake (overwriting awayWCTeam).
     @Published var homeWCTeam: WCTeam = WorldCupTeams.all[0]   // France
     @Published var awayWCTeam: WCTeam = WorldCupTeams.all[1]   // Argentina
-
+    
     private(set) var scene: GameScene?
     private let matchManager = GameKitMatchManager()
-
+    
     var isHosting: Bool { matchManager.isHost }
-
+    
     /// Pick a formation from the UI. Applied at the next reset in-game.
     func selectFormation(_ f: Formation) {
         homeFormation = f
         scene?.setHomeFormation(f)
     }
-
+    
     func startSinglePlayer() {
         matchManager.stop()
         launch(mode: .singlePlayer)
     }
-
+    
     // MARK: Multiplayer (GameKit)
-
+    
     /// Start Game Center automatching for a 2v2 (4-player) match. Once all
     /// four connect, the elected host takes seat 0 and the others claim the
     /// remaining seats; the match launches when every seat is filled.
@@ -94,19 +95,19 @@ final class GameCoordinator: ObservableObject {
         screen = .lobby
         beginSearch()
     }
-
+    
     /// Lobby "Search Again" after the search gave up with < 4 players.
     func retryMatchmaking() {
         guard screen == .lobby, GameCenterManager.shared.isAuthenticated else { return }
         beginSearch()
     }
-
+    
     // Keep automatching for up to `searchTimeout` seconds before showing the
     // "couldn't find players" screen. GKMatchmaker can give up early when the
     // pool is empty, so we quietly restart it until the countdown elapses.
     private static let searchTimeout: Double = 60
     private var searchTask: Task<Void, Never>? = nil
-
+    
     private func beginSearch() {
         matchmakingFailed = false
         lobbyStatus = L("lobby.searching")
@@ -118,7 +119,7 @@ final class GameCoordinator: ObservableObject {
         }
         matchManager.findMatch()
     }
-
+    
     /// The countdown elapsed without a full table: stop searching and show the
     /// retry/cancel screen.
     private func failSearch() {
@@ -128,20 +129,20 @@ final class GameCoordinator: ObservableObject {
         matchmakingFailed = true
         lobbyStatus = L("lobby.noPlayers")
     }
-
+    
     /// A match connected, or we're leaving the lobby — stop the countdown.
     private func endSearch() {
         searchTask?.cancel()
         searchTask = nil
     }
-
+    
     func cancelLobby() {
         endSearch()
         matchManager.stop()
         resetLobby()
         screen = .menu
     }
-
+    
     private func resetLobby() {
         seatNames = [:]
         seatOwners = [:]
@@ -154,14 +155,14 @@ final class GameCoordinator: ObservableObject {
         matchmakingFailed = false
         lobbyStatus = ""
     }
-
+    
     /// Joiner: tap a free seat in the lobby.
     func claimSeat(_ raw: Int) {
         guard !isHosting, mySeat == nil, seatNames[raw] == nil else { return }
         matchManager.sendToHost(.requestSeat(seat: raw, teamID: homeWCTeam.id,
                                              formation: homeFormation.rawValue))
     }
-
+    
     /// May the local player change the given team's country right now?
     /// Once seated, only that team's FIELD player (the captain) may. While
     /// still searching (no seat yet), you may adjust your own pick, which is
@@ -172,7 +173,7 @@ final class GameCoordinator: ObservableObject {
         }
         return home && !peerConnected
     }
-
+    
     /// Cycle a team's country in the lobby. Guarded by `canEditTeam`, so only
     /// a captain (or your own pre-seat pick) can move it. Keepers cannot.
     func changeTeamSelection(home: Bool, next: Bool) {
@@ -182,7 +183,7 @@ final class GameCoordinator: ObservableObject {
               let idx = all.firstIndex(where: { $0.id == homeWCTeam.id }) else { return }
         let n = all.count
         homeWCTeam = all[next ? (idx + 1) % n : (idx - 1 + n) % n]
-
+        
         if let raw = mySeat, let seat = PeerSeat(rawValue: raw), seat.isField {
             if seat.isHome {
                 // Seated host captain — reflect and re-broadcast directly.
@@ -197,7 +198,7 @@ final class GameCoordinator: ObservableObject {
         // Not seated yet: homeWCTeam is updated; the home column shows it via
         // `lobbyHostTeamID ?? homeWCTeam.id`, and it travels with claimSeat.
     }
-
+    
     /// The WCTeam currently shown for a lobby column (nil if the away team
     /// hasn't been picked yet).
     func lobbyTeam(home: Bool) -> WCTeam? {
@@ -205,7 +206,7 @@ final class GameCoordinator: ObservableObject {
         guard let id else { return nil }
         return WorldCupTeams.team(named: id)
     }
-
+    
     /// Host: broadcast the current lobby to everyone.
     private func broadcastLobbyState() {
         guard isHosting else { return }
@@ -215,7 +216,7 @@ final class GameCoordinator: ObservableObject {
                                       hostTeamID: homeWCTeam.id,
                                       awayTeamID: awayFieldTeamID))
     }
-
+    
     /// Host: all four seats filled — tell everyone and launch.
     private func startMatchIfReady() {
         guard isHosting, seatNames.count == PeerSeat.allCases.count else { return }
@@ -227,7 +228,7 @@ final class GameCoordinator: ObservableObject {
                           homeFormationRaw: homeFormation.rawValue,
                           awayFormationRaw: awayFieldFormation.rawValue)
     }
-
+    
     /// Configure the scene for MY seat: my team is always the local `.home`.
     private func launchMultiplayer(homeTeamID: String, awayTeamID: String,
                                    homeFormationRaw: Int, awayFormationRaw: Int) {
@@ -242,7 +243,7 @@ final class GameCoordinator: ObservableObject {
         isKeeperRole = !seat.isField
         launch(mode: .multiplayer, seat: seat, rivalFormation: rivalForm)
     }
-
+    
     private func launch(mode: MatchMode, seat: PeerSeat = .homeField,
                         rivalFormation: Formation? = nil) {
         let s = GameScene(size: GameConfig.sceneSize)
@@ -265,21 +266,21 @@ final class GameCoordinator: ObservableObject {
         if mode == .singlePlayer { isKeeperRole = false }
         screen = .playing
     }
-
+    
     // MARK: Pause (vs AI only)
-
+    
     func pauseGame() {
         guard scene?.mode == .singlePlayer, !isGamePaused else { return }
         isGamePaused = true
         scene?.setGamePaused(true)
     }
-
+    
     func resumeGame() {
         guard isGamePaused else { return }
         isGamePaused = false
         scene?.setGamePaused(false)
     }
-
+    
     /// Generate the coach's note on demand (after the player taps the button on
     /// the results screen). Kept off the match-finish path so nothing blocks or
     /// stutters the game — the on-device model only runs when explicitly asked.
@@ -295,7 +296,7 @@ final class GameCoordinator: ObservableObject {
             self.isGeneratingFeedback = false
         }
     }
-
+    
     func returnToMenu() {
         endSearch()
         matchManager.stop()
@@ -318,7 +319,7 @@ extension GameCoordinator: GameSceneDelegate {
             self.coachRequested = false
             self.isGeneratingFeedback = false
             self.screen = .results
-
+            
             // Book the match into the persistent profile (both modes) and,
             // for multiplayer, push the bests to the Game Center boards.
             let isMP = self.scene?.mode == .multiplayer
@@ -336,14 +337,14 @@ extension GameCoordinator: GameSceneDelegate {
             }
         }
     }
-
+    
     nonisolated func localPlayerCompletedWord(mistyped: Bool) {
         Task { @MainActor in
             guard let seat = self.mySeat, self.scene?.mode == .multiplayer else { return }
             self.matchManager.send(.wordCompleted(seat: seat, mistyped: mistyped))
         }
     }
-
+    
     nonisolated func formationChanged(to formation: Formation) {
         Task { @MainActor in
             self.homeFormation = formation
@@ -354,26 +355,26 @@ extension GameCoordinator: GameSceneDelegate {
             }
         }
     }
-
+    
     nonisolated func peerSend(_ message: PeerMessage) {
         Task { @MainActor in self.matchManager.send(message) }
     }
 }
 
 extension GameCoordinator: MatchManagerDelegate {
-
+    
     nonisolated func matchStateChanged() {
         Task { @MainActor in
             self.peerConnected = self.matchManager.connectedRemoteCount > 0
             if self.screen == .lobby, self.mySeat == nil {
                 let present = self.matchManager.connectedRemoteCount + 1
                 self.lobbyStatus = present < GameKitMatchManager.requiredPlayers
-                    ? "\(present)/\(GameKitMatchManager.requiredPlayers) — \(L("lobby.searching"))"
-                    : self.lobbyStatus
+                ? "\(present)/\(GameKitMatchManager.requiredPlayers) — \(L("lobby.searching"))"
+                : self.lobbyStatus
             }
         }
     }
-
+    
     /// All four players connected: the elected host seats itself and starts
     /// broadcasting lobby state; joiners wait for it, then claim seats.
     nonisolated func matchReady() {
@@ -384,14 +385,14 @@ extension GameCoordinator: MatchManagerDelegate {
             if self.matchManager.isHost {
                 self.mySeat = PeerSeat.homeField.rawValue
                 self.seatNames[PeerSeat.homeField.rawValue] =
-                    "\(self.matchManager.localDisplayName) (host)"
+                "\(self.matchManager.localDisplayName) (host)"
                 self.lobbyHostTeamID = self.homeWCTeam.id
                 self.broadcastLobbyState()
             }
             self.lobbyStatus = "\(self.seatNames.count)/4 \(L("lobby.waitingSeats"))"
         }
     }
-
+    
     nonisolated func matchFailed(error: Error?) {
         Task { @MainActor in
             if let error { NSLog("Matchmaking failed: \(error.localizedDescription)") }
@@ -414,7 +415,7 @@ extension GameCoordinator: MatchManagerDelegate {
             self.matchManager.findMatch()
         }
     }
-
+    
     nonisolated func playerLeft(playerID: String, wasHost: Bool) {
         Task { @MainActor in
             switch self.screen {
@@ -452,11 +453,11 @@ extension GameCoordinator: MatchManagerDelegate {
             }
         }
     }
-
+    
     nonisolated func didReceive(_ message: PeerMessage, fromPlayerID playerID: String) {
         Task { @MainActor in
             switch message {
-
+                
                 // ---- Lobby ----
             case .requestSeat(let seat, let teamID, let formation):
                 guard self.matchManager.isHost, self.screen == .lobby,
@@ -475,7 +476,7 @@ extension GameCoordinator: MatchManagerDelegate {
                 self.matchManager.send(.seatAssigned(seat: seat), to: [playerID])
                 self.broadcastLobbyState()
                 self.startMatchIfReady()
-
+                
             case .teamChange(let seat, let teamID):
                 // Only the seated away captain may change the away country.
                 guard self.matchManager.isHost, self.screen == .lobby,
@@ -485,7 +486,7 @@ extension GameCoordinator: MatchManagerDelegate {
                 self.awayFieldTeamID = teamID
                 self.lobbyAwayTeamID = teamID
                 self.broadcastLobbyState()
-
+                
             case .lobbyState(let filled, let names, let hostTeamID, let awayTeamID):
                 guard !self.matchManager.isHost, self.screen == .lobby else { break }
                 var map: [Int: String] = [:]
@@ -497,19 +498,19 @@ extension GameCoordinator: MatchManagerDelegate {
                 self.lobbyAwayTeamID = awayTeamID
                 if let seat = self.mySeat, map[seat] == nil { self.mySeat = nil }
                 self.lobbyStatus = "\(map.count)/4 \(L("lobby.waitingSeats"))"
-
+                
             case .seatAssigned(let seat):
                 guard !self.matchManager.isHost, self.screen == .lobby else { break }
                 self.mySeat = seat
-
+                
             case .seatDenied:
                 break   // lobbyState already shows who got there first
-
+                
             case .startMatch(let homeTeamID, let awayTeamID, let homeF, let awayF):
                 guard !self.matchManager.isHost, self.screen == .lobby, self.mySeat != nil else { break }
                 self.launchMultiplayer(homeTeamID: homeTeamID, awayTeamID: awayTeamID,
                                        homeFormationRaw: homeF, awayFormationRaw: awayF)
-
+                
                 // ---- In-match traffic, routed into the scene ----
                 // GKMatch delivers `sendDataToAllPlayers` to every machine, so
                 // no host relay is needed (unlike the old Multipeer mesh).
@@ -553,14 +554,14 @@ extension GameCoordinator: MatchManagerDelegate {
 
 struct SpriteHostView: NSViewRepresentable {
     let scene: GameScene
-
+    
     func makeNSView(context: Context) -> SKView {
         let view = SKView(frame: .zero)
         view.ignoresSiblingOrder = true
         view.presentScene(scene)
         return view
     }
-
+    
     func updateNSView(_ nsView: SKView, context: Context) {
         if nsView.scene !== scene { nsView.presentScene(scene) }
         // Grab keyboard focus so the scene receives keyDown events.
@@ -573,7 +574,7 @@ struct SpriteHostView: NSViewRepresentable {
 struct ContentView: View {
     @EnvironmentObject var coordinator: GameCoordinator
     @ObservedObject private var settings = SettingsStore.shared   // re-render on language change
-
+    
     var body: some View {
         ZStack {
             Image("game-main-bg")
@@ -617,7 +618,7 @@ struct ContentView: View {
             Text(L("gc.needSignInDetail"))
         }
     }
-
+    
     private var scrimOpacity: Double {
         switch coordinator.screen {
         case .menu:    0.30
@@ -633,7 +634,7 @@ struct ContentView: View {
 /// Back arrow used by the profile / leaderboard / settings / how-to screens.
 struct BackButton: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         Button {
             coordinator.screen = .menu
@@ -649,7 +650,7 @@ struct BackButton: View {
 struct TopBar: View {
     @EnvironmentObject var coordinator: GameCoordinator
     @ObservedObject private var gameCenter = GameCenterManager.shared
-
+    
     var body: some View {
         HStack {
             // Profile chip → Profile screen.
@@ -657,7 +658,7 @@ struct TopBar: View {
                 HStack(alignment: .center, spacing: 5) {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 24))
-
+                    
                     Text(gameCenter.playerName)
                         .font(.custom("Silom", size: 16))
                         .lineLimit(1)
@@ -674,9 +675,9 @@ struct TopBar: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
-
+            
             Spacer()
-
+            
             // Trophy → Leaderboards.
             Button(action: { coordinator.screen = .leaderboard }) {
                 Circle()
@@ -691,7 +692,7 @@ struct TopBar: View {
                     )
             }
             .buttonStyle(.plain)
-
+            
             // Gear → Settings.
             Button(action: { coordinator.screen = .settings }) {
                 Circle()
@@ -715,7 +716,7 @@ struct TopBar: View {
 
 struct MenuView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 22) {
             Text(L("menu.title"))
@@ -724,7 +725,7 @@ struct MenuView: View {
             Text(L("menu.tagline"))
                 .font(.system(.title3, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
-
+            
             VStack(spacing: 14) {
                 menuButton(L("menu.single")) {
                     coordinator.screen = .teamSelectionSingle
@@ -735,9 +736,12 @@ struct MenuView: View {
                 menuButton(L("menu.howto")) {
                     coordinator.screen = .howToPlay
                 }
+                menuButton(L("EXIT")) {
+                    NSApplication.shared.terminate(nil)
+                }
             }
             .padding(.top, 12)
-
+            
             Text(L("menu.hint"))
                 .multilineTextAlignment(.center)
                 .font(.system(size: 12, design: .monospaced))
@@ -746,7 +750,7 @@ struct MenuView: View {
         }
         .padding(40)
     }
-
+    
     private func menuButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
@@ -762,20 +766,20 @@ struct MenuView: View {
 
 struct TeamSelectionView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     let isMultiplayer: Bool
-
+    
     @State private var selectedTeam: WCTeam?
     @State private var aiTeam: WCTeam?
-
+    
     private let columns = Array(
         repeating: GridItem(.fixed(170), spacing: 20),
         count: 3
     )
-
+    
     var body: some View {
         VStack(spacing: 28) {
-
+            
             ZStack {
                 VStack(spacing: 8) {
                     Text(isMultiplayer ? "Multiplayer Match Setup" : "Single Player Match Setup")
@@ -783,21 +787,21 @@ struct TeamSelectionView: View {
                         .foregroundStyle(.yellow)
                         .multilineTextAlignment(.center)
                         .textCase(.uppercase)
-
+                    
                     Text("Choose Your Nationality")
                         .font(.title)
                         .fontWeight(.semibold)
                         .foregroundStyle(.white)
-
+                    
                     Text(isMultiplayer
                          ? "Pick the nationality you want to play as, then find a match on Game Center."
                          : "Pick the nationality you want to play as. The AI will automatically choose a different team.")
-                        .font(.body)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
+                    .font(.body)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
                 }
-
+                
                 HStack {
                     Button {
                         coordinator.screen = .menu
@@ -807,22 +811,22 @@ struct TeamSelectionView: View {
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
-
+                    
                     Spacer()
                 }
             }
             .padding(.horizontal)
-
+            
             Spacer()
-
+            
             LazyVGrid(columns: columns, spacing: 18) {
-
+                
                 ForEach(WorldCupTeams.all.sorted { $0.name < $1.name }) { team in
-
+                    
                     Button {
                         selectedTeam = team
                         coordinator.homeWCTeam = team
-
+                        
                         guard !isMultiplayer else { return }
                         let opponents = WorldCupTeams.all.filter {
                             $0.id != team.id
@@ -833,16 +837,16 @@ struct TeamSelectionView: View {
                             aiTeam = randomOpponent
                             coordinator.awayWCTeam = randomOpponent
                         }
-
+                        
                     } label: {
-
+                        
                         ZStack(alignment: .topTrailing) {
-
+                            
                             VStack(spacing: 8) {
-
+                                
                                 Text(team.flag)
                                     .font(.system(size: 48))
-
+                                
                                 Text(team.name)
                                     .font(.system(size: 14,
                                                   weight: .bold,
@@ -867,7 +871,7 @@ struct TeamSelectionView: View {
                                         lineWidth: selectedTeam?.id == team.id ? 3 : 1
                                     )
                             )
-
+                            
                             if selectedTeam?.id == team.id {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 24))
@@ -879,77 +883,77 @@ struct TeamSelectionView: View {
                     .buttonStyle(.plain)
                 }
             }
-
+            
             if !isMultiplayer {
                 HStack {
                     // MARK: Player
-
+                    
                     VStack(spacing: 12) {
-
+                        
                         Text(L("common.you"))
                             .font(.headline)
                             .foregroundColor(.white.opacity(0.8))
-
+                        
                         if let selectedTeam {
-
+                            
                             VStack {
                                 Text(selectedTeam.flag)
                                     .font(.system(size: 60))
-
+                                
                                 Text(selectedTeam.name)
                                     .font(.title3.bold())
                                     .foregroundColor(.white)
                             }
-
+                            
                         } else {
                             Text("Waiting...")
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
-
+                    
                     VStack {
                         Spacer()
-
+                        
                         Text("VS")
                             .font(.system(size: 28,
                                           weight: .black,
                                           design: .monospaced))
                             .foregroundColor(.yellow)
-
+                        
                         Spacer()
                     }
                     .frame(width: 60)
-
+                    
                     // MARK: AI
-
+                    
                     VStack(spacing: 12) {
-
+                        
                         Text(L("common.ai"))
                             .font(.headline)
                             .foregroundColor(.white.opacity(0.8))
-
+                        
                         if let aiTeam {
-
+                            
                             VStack {
                                 Text(aiTeam.flag)
                                     .font(.system(size: 60))
-
+                                
                                 Text(aiTeam.name)
                                     .font(.title3.bold())
                                     .foregroundColor(.white)
                             }
-
+                            
                         } else {
-
+                            
                             Text("Waiting...")
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
                 }
             }
-
+            
             if isMultiplayer ? selectedTeam != nil : aiTeam != nil {
-
+                
                 Button {
                     if isMultiplayer {
                         coordinator.startMatchmaking()
@@ -957,7 +961,7 @@ struct TeamSelectionView: View {
                         coordinator.startSinglePlayer()
                     }
                 } label: {
-
+                    
                     Text(isMultiplayer ? "Find Match" : "Start Match")
                         .font(.title2.bold())
                         .bold(true)
@@ -980,13 +984,13 @@ struct TeamSelectionView: View {
 /// when all four are taken.
 struct LobbyView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 18) {
             Text(L("lobby.title"))
                 .font(.system(size: 28, weight: .heavy, design: .monospaced))
                 .foregroundColor(.yellow)
-
+            
             HStack(spacing: 26) {
                 teamColumn(home: true,  seats: [.homeField, .homeKeeper])
                 Text("VS")
@@ -994,7 +998,7 @@ struct LobbyView: View {
                     .foregroundColor(.white)
                 teamColumn(home: false, seats: [.awayField, .awayKeeper])
             }
-
+            
             HStack(spacing: 10) {
                 if !coordinator.matchmakingFailed {
                     ProgressView().controlSize(.small)
@@ -1005,12 +1009,12 @@ struct LobbyView: View {
                                      ? .orange : .white.opacity(0.65))
             }
             .padding(.top, 4)
-
+            
             Text(L("lobby.hint"))
                 .multilineTextAlignment(.center)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4))
-
+            
             if coordinator.matchmakingFailed {
                 Button(action: { coordinator.retryMatchmaking() }) {
                     Text(L("lobby.retry"))
@@ -1022,7 +1026,7 @@ struct LobbyView: View {
                 }
                 .buttonStyle(.plain)
             }
-
+            
             Button(action: { coordinator.cancelLobby() }) {
                 Text(L("lobby.cancel"))
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
@@ -1034,7 +1038,7 @@ struct LobbyView: View {
         }
         .padding(40)
     }
-
+    
     private var statusLine: String {
         let filled = coordinator.seatNames.count
         if coordinator.matchmakingFailed { return L("lobby.noPlayers") }
@@ -1042,25 +1046,25 @@ struct LobbyView: View {
         if filled == PeerSeat.allCases.count { return L("lobby.starting") }
         return "\(filled)/4 \(L("lobby.waitingSeats"))"
     }
-
+    
     private func teamColumn(home: Bool, seats: [PeerSeat]) -> some View {
         let team = coordinator.lobbyTeam(home: home)
         let name = team?.name ?? (home ? coordinator.homeWCTeam.id : "— away —")
         let canEdit = coordinator.canEditTeam(home: home)
-
+        
         return VStack(spacing: 10) {
             Text(name.uppercased())
                 .font(.system(size: 13, weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.85))
-
+            
             // Country selector, right under the name. Interactive only for the
             // captain of this team (or your own pick while still searching).
             countrySelector(home: home, team: team, canEdit: canEdit)
-
+            
             ForEach(seats, id: \.rawValue) { seat in seatCard(seat) }
         }
     }
-
+    
     /// `‹  🏳  ›` picker. Arrows show only when `canEdit`; otherwise it's a
     /// static flag so both countries are always visible to everyone.
     private func countrySelector(home: Bool, team: WCTeam?, canEdit: Bool) -> some View {
@@ -1081,7 +1085,7 @@ struct LobbyView: View {
         .overlay(RoundedRectangle(cornerRadius: 7)
             .stroke(canEdit ? Color.yellow.opacity(0.8) : Color.clear, lineWidth: 1.2))
     }
-
+    
     private func teamArrow(_ glyph: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(glyph)
@@ -1091,13 +1095,13 @@ struct LobbyView: View {
         }
         .buttonStyle(.plain)
     }
-
+    
     private func seatCard(_ seat: PeerSeat) -> some View {
         let name = coordinator.seatNames[seat.rawValue]
         let isMine = coordinator.mySeat == seat.rawValue
         let claimable = !coordinator.isHosting && coordinator.mySeat == nil
         && name == nil && coordinator.peerConnected
-
+        
         return Button(action: { coordinator.claimSeat(seat.rawValue) }) {
             VStack(spacing: 3) {
                 Text(seat.roleLabel)
@@ -1121,7 +1125,7 @@ struct LobbyView: View {
 
 struct PlayingView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 0) {
             if coordinator.isKeeperRole {
@@ -1140,7 +1144,7 @@ struct PlayingView: View {
                     SpriteHostView(scene: scene)
                         .aspectRatio(GameConfig.sceneSize.width / GameConfig.sceneSize.height, contentMode: .fit)
                 }
-
+                
                 // vs AI only: pause button, top-left corner.
                 if coordinator.scene?.mode == .singlePlayer && !coordinator.isGamePaused {
                     Button(action: { coordinator.pauseGame() }) {
@@ -1156,7 +1160,7 @@ struct PlayingView: View {
                     .buttonStyle(.plain)
                     .padding(12)
                 }
-
+                
                 if coordinator.scene?.mode == .multiplayer {
                     HStack {
                         Spacer()
@@ -1166,7 +1170,7 @@ struct PlayingView: View {
                             .padding(10)
                     }
                 }
-
+                
                 if coordinator.isGamePaused {
                     PauseOverlay()
                 }
@@ -1178,23 +1182,23 @@ struct PlayingView: View {
 /// Pause menu shown over the frozen pitch (vs AI only).
 struct PauseOverlay: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
-
+            
             VStack(spacing: 26) {
                 Text(L("pause.title"))
                     .font(.system(size: 26, weight: .heavy, design: .monospaced))
                     .foregroundColor(.white)
-
+                
                 Button(action: { coordinator.resumeGame() }) {
                     Text(L("pause.resume"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
-
+                
                 Button(action: { coordinator.returnToMenu() }) {
                     Text(L("pause.menu"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
@@ -1214,7 +1218,7 @@ struct PauseOverlay: View {
 /// where the three outfielders line up. Click a card, or use ← / → to cycle.
 struct FormationBar: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
@@ -1225,7 +1229,7 @@ struct FormationBar: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundColor(.cyan.opacity(0.7))
             }
-
+            
             ForEach(Formation.allCases, id: \.self) { f in
                 let selected = coordinator.homeFormation == f
                 Button(action: { coordinator.selectFormation(f) }) {
@@ -1255,12 +1259,12 @@ struct FormationBar: View {
 struct MiniFormation: View {
     let formation: Formation
     let selected: Bool
-
+    
     private func yNorm(_ lane: Lane) -> CGFloat {
         if formation == .oneOneOne { return 0.5 }          // stacked on the centre axis
         switch lane { case .top: return 0.24; case .middle: return 0.5; case .bottom: return 0.76 }
     }
-
+    
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -1286,7 +1290,7 @@ struct MiniFormation: View {
 
 struct ResultsView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 18) {
             Text(L("results.fulltime"))
@@ -1295,20 +1299,20 @@ struct ResultsView: View {
             Text("\(coordinator.finalHome)  –  \(coordinator.finalAway)")
                 .font(.system(size: 56, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
-
+            
             if let hp = coordinator.finalHomePens, let ap = coordinator.finalAwayPens {
                 Text("(\(hp) – \(ap) \(L("results.penalties")))")
                     .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundColor(.yellow.opacity(0.85))
             }
-
+            
             if let stats = coordinator.homeStats {
                 StatsPanel(stats: stats)
             }
-
+            
             coachSection
                 .padding(.vertical, 4)
-
+            
             Button(action: { coordinator.returnToMenu() }) {
                 Text(L("results.back"))
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
@@ -1320,7 +1324,7 @@ struct ResultsView: View {
         }
         .padding(40)
     }
-
+    
     /// Either the "get coach analysis" button, a loading spinner, or the note.
     @ViewBuilder
     private var coachSection: some View {
@@ -1351,21 +1355,21 @@ struct ResultsView: View {
 /// Compact grid of the match statistics shown on the results screen.
 struct StatsPanel: View {
     let stats: PlayerStats
-
+    
     private var wpm: Int { Int(stats.averageWPM.rounded()) }
     private var accuracy: Int { Int((stats.accuracy * 100).rounded()) }
     private var fastest: String {
         stats.fastestWordSeconds.map { String(format: "%.1fs", $0) } ?? "—"
     }
-
+    
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-
+    
     var body: some View {
         VStack(spacing: 10) {
             Text(L("results.stats"))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.5))
-
+            
             LazyVGrid(columns: columns, spacing: 14) {
                 stat("WPM", "\(wpm)")
                 stat("ACCURACY", "\(accuracy)%")
@@ -1383,7 +1387,7 @@ struct StatsPanel: View {
         .background(Color.white.opacity(0.05))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.15), lineWidth: 1))
     }
-
+    
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(spacing: 3) {
             Text(value)
@@ -1401,7 +1405,7 @@ struct StatsPanel: View {
 #Preview("Menu") {
     let coordinator = GameCoordinator()
     coordinator.screen = .menu
-
+    
     return ContentView()
         .environmentObject(coordinator)
 }
