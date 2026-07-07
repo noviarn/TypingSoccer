@@ -60,6 +60,9 @@ enum PeerMessage: Codable {
     case lobbyState(filledSeats: [Int], names: [String], hostTeamID: String, awayTeamID: String?)
     /// Joiner → host: claim a seat. teamID/formation only matter for awayField.
     case requestSeat(seat: Int, teamID: String, formation: Int)
+    /// Away captain → host: change the away team's country while in the lobby.
+    /// (The host captain changes its own pick locally and re-broadcasts.)
+    case teamChange(seat: Int, teamID: String)
     /// Host → one joiner: your claim succeeded / failed.
     case seatAssigned(seat: Int)
     case seatDenied(seat: Int)
@@ -158,6 +161,14 @@ final class GameKitMatchManager: NSObject {
                 self.electHostIfReady()
             }
         }
+    }
+
+    /// Cancel just the automatch request, without tearing down a match that
+    /// may already exist. Used to pause searching (e.g. after a timeout) while
+    /// keeping the lobby on screen.
+    func cancelSearch() {
+        if isMatchmaking { GKMatchmaker.shared().cancel() }
+        isMatchmaking = false
     }
 
     func stop() {

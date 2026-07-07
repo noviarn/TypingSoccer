@@ -79,6 +79,12 @@ enum Localization {
         "lobby.cancel": "CANCEL",
         "lobby.start": "START",
         "lobby.hint": "Sign in to Game Center on every Mac. Field players run the 3 outfielders;\nkeeper players guard the goal. If someone quits mid-match, the AI takes over.",
+        "lobby.noPlayers": "Couldn't find 3 other players. Search again or cancel.",
+        "lobby.retry": "SEARCH AGAIN",
+
+        "gc.needSignIn": "Sign in to Game Center",
+        "gc.needSignInDetail": "Multiplayer needs Game Center. Open System Settings › Game Center to sign in, then try Find Match again.",
+        "alert.ok": "OK",
 
         "pause.title": "PAUSE",
         "pause.resume": "Resume",
@@ -149,6 +155,12 @@ enum Localization {
         "lobby.cancel": "BATAL",
         "lobby.start": "MULAI",
         "lobby.hint": "Masuk ke Game Center di setiap Mac. Pemain lapangan mengendalikan 3 pemain;\npemain kiper menjaga gawang. Jika ada yang keluar di tengah laga, AI menggantikan.",
+        "lobby.noPlayers": "Tidak menemukan 3 pemain lain. Cari lagi atau batal.",
+        "lobby.retry": "CARI LAGI",
+
+        "gc.needSignIn": "Masuk ke Game Center",
+        "gc.needSignInDetail": "Multipemain memerlukan Game Center. Buka Pengaturan Sistem › Game Center untuk masuk, lalu coba Cari Pertandingan lagi.",
+        "alert.ok": "OKE",
 
         "pause.title": "JEDA",
         "pause.resume": "Lanjutkan",

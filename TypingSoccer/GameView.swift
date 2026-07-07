@@ -47,6 +47,8 @@ final class GameCoordinator: ObservableObject {
     @Published var finalHomePens: Int? = nil   // set only if a shootout decided it
     @Published var finalAwayPens: Int? = nil
     @Published var peerConnected = false
+    @Published var matchmakingFailed = false            // lobby: search finished with no full table
+    @Published var gcAlertShown = false                 // Game Center sign-in required alert
     @Published var isGeneratingFeedback = false
     @Published var homeStats: PlayerStats? = nil   // stats for the results screen
     @Published var coachRequested = false          // has the coach note been asked for?
@@ -80,14 +82,61 @@ final class GameCoordinator: ObservableObject {
     /// four connect, the elected host takes seat 0 and the others claim the
     /// remaining seats; the match launches when every seat is filled.
     func startMatchmaking() {
+        // Don't drop the player into the lobby if Game Center isn't signed
+        // in — findMatch would fail instantly. Prompt sign-in instead.
+        guard GameCenterManager.shared.isAuthenticated else {
+            gcAlertShown = true
+            GameCenterManager.shared.authenticate()   // re-present the sign-in sheet
+            return
+        }
         matchManager.delegate = self
         resetLobby()
-        lobbyStatus = L("lobby.searching")
         screen = .lobby
+        beginSearch()
+    }
+
+    /// Lobby "Search Again" after the search gave up with < 4 players.
+    func retryMatchmaking() {
+        guard screen == .lobby, GameCenterManager.shared.isAuthenticated else { return }
+        beginSearch()
+    }
+
+    // Keep automatching for up to `searchTimeout` seconds before showing the
+    // "couldn't find players" screen. GKMatchmaker can give up early when the
+    // pool is empty, so we quietly restart it until the countdown elapses.
+    private static let searchTimeout: Double = 60
+    private var searchTask: Task<Void, Never>? = nil
+
+    private func beginSearch() {
+        matchmakingFailed = false
+        lobbyStatus = L("lobby.searching")
+        searchTask?.cancel()
+        searchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.searchTimeout * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.screen == .lobby else { return }
+            self.failSearch()
+        }
         matchManager.findMatch()
     }
 
+    /// The countdown elapsed without a full table: stop searching and show the
+    /// retry/cancel screen.
+    private func failSearch() {
+        matchManager.cancelSearch()
+        searchTask?.cancel()
+        searchTask = nil
+        matchmakingFailed = true
+        lobbyStatus = L("lobby.noPlayers")
+    }
+
+    /// A match connected, or we're leaving the lobby — stop the countdown.
+    private func endSearch() {
+        searchTask?.cancel()
+        searchTask = nil
+    }
+
     func cancelLobby() {
+        endSearch()
         matchManager.stop()
         resetLobby()
         screen = .menu
@@ -102,6 +151,7 @@ final class GameCoordinator: ObservableObject {
         awayFieldTeamID = nil
         awayFieldFormation = .oneTwo
         peerConnected = false
+        matchmakingFailed = false
         lobbyStatus = ""
     }
 
@@ -110,6 +160,50 @@ final class GameCoordinator: ObservableObject {
         guard !isHosting, mySeat == nil, seatNames[raw] == nil else { return }
         matchManager.sendToHost(.requestSeat(seat: raw, teamID: homeWCTeam.id,
                                              formation: homeFormation.rawValue))
+    }
+
+    /// May the local player change the given team's country right now?
+    /// Once seated, only that team's FIELD player (the captain) may. While
+    /// still searching (no seat yet), you may adjust your own pick, which is
+    /// shown in the HOME column until the host seats everyone.
+    func canEditTeam(home: Bool) -> Bool {
+        if let raw = mySeat, let seat = PeerSeat(rawValue: raw) {
+            return seat.isField && seat.isHome == home
+        }
+        return home && !peerConnected
+    }
+
+    /// Cycle a team's country in the lobby. Guarded by `canEditTeam`, so only
+    /// a captain (or your own pre-seat pick) can move it. Keepers cannot.
+    func changeTeamSelection(home: Bool, next: Bool) {
+        guard screen == .lobby, canEditTeam(home: home) else { return }
+        let all = WorldCupTeams.all
+        guard !all.isEmpty,
+              let idx = all.firstIndex(where: { $0.id == homeWCTeam.id }) else { return }
+        let n = all.count
+        homeWCTeam = all[next ? (idx + 1) % n : (idx - 1 + n) % n]
+
+        if let raw = mySeat, let seat = PeerSeat(rawValue: raw), seat.isField {
+            if seat.isHome {
+                // Seated host captain — reflect and re-broadcast directly.
+                lobbyHostTeamID = homeWCTeam.id
+                broadcastLobbyState()
+            } else {
+                // Seated away captain — show it locally, ask the host to record.
+                lobbyAwayTeamID = homeWCTeam.id
+                matchManager.sendToHost(.teamChange(seat: raw, teamID: homeWCTeam.id))
+            }
+        }
+        // Not seated yet: homeWCTeam is updated; the home column shows it via
+        // `lobbyHostTeamID ?? homeWCTeam.id`, and it travels with claimSeat.
+    }
+
+    /// The WCTeam currently shown for a lobby column (nil if the away team
+    /// hasn't been picked yet).
+    func lobbyTeam(home: Bool) -> WCTeam? {
+        let id = home ? (lobbyHostTeamID ?? homeWCTeam.id) : lobbyAwayTeamID
+        guard let id else { return nil }
+        return WorldCupTeams.team(named: id)
     }
 
     /// Host: broadcast the current lobby to everyone.
@@ -203,6 +297,7 @@ final class GameCoordinator: ObservableObject {
     }
 
     func returnToMenu() {
+        endSearch()
         matchManager.stop()
         scene = nil
         isGamePaused = false
@@ -284,6 +379,7 @@ extension GameCoordinator: MatchManagerDelegate {
     nonisolated func matchReady() {
         Task { @MainActor in
             guard self.screen == .lobby else { return }
+            self.endSearch()          // full table — stop the countdown
             self.peerConnected = true
             if self.matchManager.isHost {
                 self.mySeat = PeerSeat.homeField.rawValue
@@ -300,7 +396,22 @@ extension GameCoordinator: MatchManagerDelegate {
         Task { @MainActor in
             if let error { NSLog("Matchmaking failed: \(error.localizedDescription)") }
             guard self.screen == .lobby else { return }
-            self.cancelLobby()
+            if !GameCenterManager.shared.isAuthenticated {
+                // Not signed in — leave the lobby and prompt Game Center sign-in.
+                self.endSearch()
+                self.cancelLobby()
+                self.gcAlertShown = true
+                GameCenterManager.shared.authenticate()
+                return
+            }
+            // Authenticated: GKMatchmaker gave up early (empty pool). Keep the
+            // waiting screen and quietly resume searching until the 60s
+            // countdown decides to surface the "no players" screen.
+            guard self.searchTask != nil, !self.matchmakingFailed else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard self.searchTask != nil, self.screen == .lobby,
+                  !self.peerConnected else { return }
+            self.matchManager.findMatch()
         }
     }
 
@@ -364,6 +475,16 @@ extension GameCoordinator: MatchManagerDelegate {
                 self.matchManager.send(.seatAssigned(seat: seat), to: [playerID])
                 self.broadcastLobbyState()
                 self.startMatchIfReady()
+
+            case .teamChange(let seat, let teamID):
+                // Only the seated away captain may change the away country.
+                guard self.matchManager.isHost, self.screen == .lobby,
+                      seat == PeerSeat.awayField.rawValue,
+                      self.seatOwners[seat] == playerID,
+                      WorldCupTeams.team(named: teamID) != nil else { break }
+                self.awayFieldTeamID = teamID
+                self.lobbyAwayTeamID = teamID
+                self.broadcastLobbyState()
 
             case .lobbyState(let filled, let names, let hostTeamID, let awayTeamID):
                 guard !self.matchManager.isHost, self.screen == .lobby else { break }
@@ -489,6 +610,11 @@ struct ContentView: View {
                     Spacer()
                 }
             }
+        }
+        .alert(L("gc.needSignIn"), isPresented: $coordinator.gcAlertShown) {
+            Button(L("alert.ok"), role: .cancel) { }
+        } message: {
+            Text(L("gc.needSignInDetail"))
         }
     }
 
@@ -862,20 +988,21 @@ struct LobbyView: View {
                 .foregroundColor(.yellow)
 
             HStack(spacing: 26) {
-                teamColumn(title: coordinator.lobbyHostTeamID ?? coordinator.homeWCTeam.id,
-                           seats: [.homeField, .homeKeeper])
+                teamColumn(home: true,  seats: [.homeField, .homeKeeper])
                 Text("VS")
                     .font(.system(size: 20, weight: .black, design: .monospaced))
                     .foregroundColor(.white)
-                teamColumn(title: coordinator.lobbyAwayTeamID ?? "— away —",
-                           seats: [.awayField, .awayKeeper])
+                teamColumn(home: false, seats: [.awayField, .awayKeeper])
             }
 
             HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
+                if !coordinator.matchmakingFailed {
+                    ProgressView().controlSize(.small)
+                }
                 Text(statusLine)
                     .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.65))
+                    .foregroundColor(coordinator.matchmakingFailed
+                                     ? .orange : .white.opacity(0.65))
             }
             .padding(.top, 4)
 
@@ -883,6 +1010,18 @@ struct LobbyView: View {
                 .multilineTextAlignment(.center)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.white.opacity(0.4))
+
+            if coordinator.matchmakingFailed {
+                Button(action: { coordinator.retryMatchmaking() }) {
+                    Text(L("lobby.retry"))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .frame(width: 200, height: 40)
+                        .background(Color.yellow.opacity(0.15))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 1.5))
+                        .foregroundColor(.yellow)
+                }
+                .buttonStyle(.plain)
+            }
 
             Button(action: { coordinator.cancelLobby() }) {
                 Text(L("lobby.cancel"))
@@ -898,18 +1037,59 @@ struct LobbyView: View {
 
     private var statusLine: String {
         let filled = coordinator.seatNames.count
+        if coordinator.matchmakingFailed { return L("lobby.noPlayers") }
         if !coordinator.peerConnected { return L("lobby.searching") }
         if filled == PeerSeat.allCases.count { return L("lobby.starting") }
         return "\(filled)/4 \(L("lobby.waitingSeats"))"
     }
 
-    private func teamColumn(title: String, seats: [PeerSeat]) -> some View {
-        VStack(spacing: 10) {
-            Text(title.uppercased())
+    private func teamColumn(home: Bool, seats: [PeerSeat]) -> some View {
+        let team = coordinator.lobbyTeam(home: home)
+        let name = team?.name ?? (home ? coordinator.homeWCTeam.id : "— away —")
+        let canEdit = coordinator.canEditTeam(home: home)
+
+        return VStack(spacing: 10) {
+            Text(name.uppercased())
                 .font(.system(size: 13, weight: .heavy, design: .monospaced))
                 .foregroundColor(.white.opacity(0.85))
+
+            // Country selector, right under the name. Interactive only for the
+            // captain of this team (or your own pick while still searching).
+            countrySelector(home: home, team: team, canEdit: canEdit)
+
             ForEach(seats, id: \.rawValue) { seat in seatCard(seat) }
         }
+    }
+
+    /// `‹  🏳  ›` picker. Arrows show only when `canEdit`; otherwise it's a
+    /// static flag so both countries are always visible to everyone.
+    private func countrySelector(home: Bool, team: WCTeam?, canEdit: Bool) -> some View {
+        HStack(spacing: 12) {
+            if canEdit {
+                teamArrow("‹") { coordinator.changeTeamSelection(home: home, next: false) }
+            }
+            Text(team?.flag ?? "🏳️")
+                .font(.system(size: 22))
+                .opacity(team == nil ? 0.4 : 1)
+            if canEdit {
+                teamArrow("›") { coordinator.changeTeamSelection(home: home, next: true) }
+            }
+        }
+        .frame(height: 30)
+        .padding(.horizontal, 12)
+        .background(canEdit ? Color.yellow.opacity(0.12) : Color.clear)
+        .overlay(RoundedRectangle(cornerRadius: 7)
+            .stroke(canEdit ? Color.yellow.opacity(0.8) : Color.clear, lineWidth: 1.2))
+    }
+
+    private func teamArrow(_ glyph: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(glyph)
+                .font(.system(size: 18, weight: .black, design: .monospaced))
+                .foregroundColor(.yellow)
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
     }
 
     private func seatCard(_ seat: PeerSeat) -> some View {
