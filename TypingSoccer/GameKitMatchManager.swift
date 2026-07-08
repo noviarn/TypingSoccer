@@ -36,6 +36,12 @@
 import Foundation
 import GameKit
 
+/// One switch for all matchmaking debug tracing. Watch it in Xcode's console
+/// (or Console.app) while testing on two Macs — every step is tagged `🎮MM`.
+func mmLog(_ message: @autoclosure () -> String) {
+    NSLog("🎮MM %@", message())
+}
+
 /// Multiplayer format. Raw counts drive matchmaking and seat layout.
 enum MPMode: Int, Codable {
     case oneVsOne = 1
@@ -89,11 +95,13 @@ enum PeerMessage: Codable {
     /// my party room key (nil if I searched solo). The host groups by key so
     /// teammates share a side, then hands out seats.
     case hello(country: String, roomKey: String?)
-    /// Host → one player: your assigned seat.
-    case seatAssigned(seat: Int)
-    /// Host → all: everyone is seated — launch the match.
+    /// Host → all: everyone is seated — launch the match. `seatMap` maps each
+    /// player's gamePlayerID to a PeerSeat raw value; carrying it inside
+    /// startMatch (instead of a separate message) means seating can't arrive
+    /// out of order, which otherwise left a client launched with no seat.
     case startMatch(homeTeamID: String, awayTeamID: String,
-                    homeFormation: Int, awayFormation: Int)
+                    homeFormation: Int, awayFormation: Int,
+                    seatMap: [String: Int])
 
     // MARK: Inputs (joiners + host, tagged with the sender's seat)
     case formationUpdate(homeTeam: Bool, formation: Int)   // field players only
@@ -111,8 +119,6 @@ enum PeerMessage: Codable {
     case chaseState(homeTeam: Bool, lane: Int)             // committed chase assignment
     case addedTime
     case breakNow(kind: Int, shootoutGoalRight: Bool?)     // 0 HT, 1 ET, 2 ET-HT, 3 pens, 4 full time
-    /// Host → all: a seat's human left mid-match; the AI now runs it.
-    case seatWentAI(seat: Int)
 }
 
 protocol MatchManagerDelegate: AnyObject {
@@ -192,23 +198,25 @@ final class GameKitMatchManager: NSObject {
     /// Master: open a private room for `key` and wait for a teammate to join.
     func hostRoom(mode: MPMode, key: String) {
         stop()
-        guard authGuard() else { return }
+        guard authGuard() else { mmLog("hostRoom aborted — not authenticated"); return }
         self.mode = mode
         roomKey = key
         isRoomMaster = true
-        beginFind(playerGroup: groupID(forRoomKey: key), minPlayers: 2, maxPlayers: 4,
-                  stage: .party)
+        let group = groupID(forRoomKey: key)
+        mmLog("hostRoom key=\(key) playerGroup=\(group) me=\(localPlayerID)")
+        beginFind(playerGroup: group, minPlayers: 2, maxPlayers: 4, stage: .party)
     }
 
     /// Teammate: join the private room identified by `key`.
     func joinRoom(mode: MPMode, key: String) {
         stop()
-        guard authGuard() else { return }
+        guard authGuard() else { mmLog("joinRoom aborted — not authenticated"); return }
         self.mode = mode
         roomKey = key
         isRoomMaster = false
-        beginFind(playerGroup: groupID(forRoomKey: key), minPlayers: 2, maxPlayers: 4,
-                  stage: .party)
+        let group = groupID(forRoomKey: key)
+        mmLog("joinRoom key=\(key) playerGroup=\(group) me=\(localPlayerID)")
+        beginFind(playerGroup: group, minPlayers: 2, maxPlayers: 4, stage: .party)
     }
 
     // MARK: Battle (find the opposing side)
@@ -216,13 +224,14 @@ final class GameKitMatchManager: NSObject {
     /// Start matchmaking for opponents. 1v1 and solo players automatch a fresh
     /// table; a 2v2 party fills the two opponent seats onto its existing match.
     func startBattle(mode: MPMode) {
-        guard authGuard() else { return }
+        guard authGuard() else { mmLog("startBattle aborted — not authenticated"); return }
         self.mode = mode
         if mode == .twoVsTwo, isRoomMaster, let match, connectedTotal < mode.totalPlayers {
             // We already have our teammate — add automatched opponents to the
             // existing party match. (Also the retry path after a timed-out search.)
             stage = .battle
             isMatchmaking = true
+            mmLog("startBattle 2v2 party → addPlayers to pool=\(mode.poolGroup) (have \(connectedTotal))")
             let request = makeRequest(playerGroup: mode.poolGroup,
                                       minPlayers: 4, maxPlayers: 4)
             GKMatchmaker.shared().addPlayers(to: match, matchRequest: request) { [weak self] error in
@@ -230,14 +239,17 @@ final class GameKitMatchManager: NSObject {
                     guard let self else { return }
                     if let error {
                         self.isMatchmaking = false
+                        mmLog("addPlayers failed: \(error.localizedDescription)")
                         self.delegate?.matchFailed(error: error)
                         return
                     }
+                    mmLog("addPlayers request accepted — waiting for opponents")
                     self.checkReady()
                 }
             }
         } else {
             // 1v1, or a solo 2v2 player: automatch the whole table.
+            mmLog("startBattle \(mode == .oneVsOne ? "1v1" : "solo 2v2") → findMatch pool=\(mode.poolGroup) size=\(mode.totalPlayers)")
             beginFind(playerGroup: mode.poolGroup,
                       minPlayers: mode.totalPlayers, maxPlayers: mode.totalPlayers,
                       stage: .battle)
@@ -268,15 +280,22 @@ final class GameKitMatchManager: NSObject {
         isMatchmaking = true
         let request = makeRequest(playerGroup: playerGroup,
                                   minPlayers: minPlayers, maxPlayers: maxPlayers)
+        mmLog("findMatch start stage=\(stage) group=\(playerGroup) min=\(minPlayers) max=\(maxPlayers)")
         GKMatchmaker.shared().findMatch(for: request) { [weak self] match, error in
             DispatchQueue.main.async {
-                guard let self, self.isMatchmaking else { return }
+                guard let self else { return }
+                guard self.isMatchmaking else {
+                    mmLog("findMatch returned but search was cancelled — ignoring")
+                    return
+                }
                 if let error {
                     self.isMatchmaking = false
+                    mmLog("findMatch failed: \(error.localizedDescription)")
                     self.delegate?.matchFailed(error: error)
                     return
                 }
-                guard let match else { return }
+                guard let match else { mmLog("findMatch returned nil match"); return }
+                mmLog("findMatch returned — players=\(match.players.count) expected=\(match.expectedPlayerCount)")
                 self.match = match
                 match.delegate = self
                 self.delegate?.matchStateChanged()
@@ -293,6 +312,7 @@ final class GameKitMatchManager: NSObject {
     }
 
     func stop() {
+        mmLog("stop() — cancelling search and tearing down match")
         if isMatchmaking { GKMatchmaker.shared().cancel() }
         isMatchmaking = false
         stage = .idle
@@ -312,16 +332,19 @@ final class GameKitMatchManager: NSObject {
     /// the connection delegate re-invokes this on every join.
     private func checkReady() {
         guard match != nil else { return }
+        mmLog("checkReady stage=\(stage) connected=\(connectedTotal)/\(mode.totalPlayers) partyAnnounced=\(partyAnnounced)")
         if connectedTotal >= mode.totalPlayers {
             guard hostPlayerID == nil else { return }
             stage = .battle
             hostPlayerID = allPlayerIDs.sorted().first
             isMatchmaking = false
+            mmLog("MATCH READY — host=\(hostPlayerID ?? "?") me=\(localPlayerID) isHost=\(isHost) players=\(allPlayerIDs)")
             delegate?.matchReady()
         } else if stage == .party, connectedTotal >= 2, !partyAnnounced {
             // Teammate connected. Keep the match so Battle can add opponents.
             partyAnnounced = true
             isMatchmaking = false
+            mmLog("PARTY READY — me=\(localPlayerID) isRoomMaster=\(isRoomMaster) players=\(allPlayerIDs)")
             delegate?.partyReady()
         }
     }
@@ -370,9 +393,11 @@ extension GameKitMatchManager: GKMatchDelegate {
         DispatchQueue.main.async {
             switch state {
             case .connected:
+                mmLog("player CONNECTED \(player.gamePlayerID) (\(player.displayName)) — now \(self.connectedTotal) total")
                 self.delegate?.matchStateChanged()
                 self.checkReady()
             case .disconnected:
+                mmLog("player DISCONNECTED \(player.gamePlayerID) wasHost=\(player.gamePlayerID == self.hostPlayerID)")
                 self.delegate?.playerLeft(playerID: player.gamePlayerID,
                                           wasHost: player.gamePlayerID == self.hostPlayerID)
                 self.delegate?.matchStateChanged()
@@ -384,6 +409,7 @@ extension GameKitMatchManager: GKMatchDelegate {
 
     func match(_ match: GKMatch, didFailWithError error: Error?) {
         DispatchQueue.main.async {
+            mmLog("GKMatch didFailWithError: \(error?.localizedDescription ?? "nil")")
             self.delegate?.matchFailed(error: error)
         }
     }
