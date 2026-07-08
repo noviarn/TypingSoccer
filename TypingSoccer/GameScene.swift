@@ -35,9 +35,12 @@ final class GameScene: SKScene {
     var mode: MatchMode = .singlePlayer
     /// In multiplayer, whether this machine is the authoritative host.
     var isNetworkHost = false
-    /// This machine's chair in a 2v2 match. The host is always `.homeField`.
-    /// Single player uses the default (the human controls the whole team).
+    /// This machine's chair. The host is always `.homeField`. Single player
+    /// uses the default (the human controls the whole team).
     var localSeat: PeerSeat = .homeField
+    /// Humans per team: 2 in 2v2 (field + keeper), 1 in 1v1 (one human runs the
+    /// whole team, keeper included). Single player leaves this at the default.
+    var teamSize: Int = 2
 
     /// A mirroring joiner in a multiplayer match: renders and animates
     /// locally, but every game decision comes from the host.
@@ -53,7 +56,8 @@ final class GameScene: SKScene {
     /// in 2v2 the field player owns the outfielders, the keeper player the GK.
     private func localControls(_ node: PlayerNode) -> Bool {
         guard node.team == .home else { return false }
-        if mode == .singlePlayer { return true }
+        // Single player, or 1v1: one human runs the entire team (keeper too).
+        if mode == .singlePlayer || teamSize == 1 { return true }
         return node.isGoalkeeper ? !localIsField : localIsField
     }
 
@@ -496,7 +500,7 @@ final class GameScene: SKScene {
     /// outfielders or goalkeeper — must be a participant. Kickoff words are
     /// contested by the two field players.)
     private var localTypesThisDuel: Bool {
-        if duelKind == .kickoff { return mode == .singlePlayer || localIsField }
+        if duelKind == .kickoff { return mode == .singlePlayer || teamSize == 1 || localIsField }
         if let a = duelAttacker, localControls(a) { return true }
         if let d = duelDefender, localControls(d) { return true }
         return false
@@ -506,9 +510,10 @@ final class GameScene: SKScene {
     private func controllerSeat(of node: PlayerNode) -> PeerSeat {
         switch (node.team == .home, node.isGoalkeeper) {
         case (true, false):  return .homeField
-        case (true, true):   return .homeKeeper
+        // In 1v1 the keeper is run by the same human as the outfielders.
+        case (true, true):   return teamSize == 1 ? .homeField : .homeKeeper
         case (false, false): return .awayField
-        case (false, true):  return .awayKeeper
+        case (false, true):  return teamSize == 1 ? .awayField : .awayKeeper
         }
     }
 

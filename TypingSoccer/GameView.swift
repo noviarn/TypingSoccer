@@ -9,16 +9,16 @@
 
 import SwiftUI
 import SpriteKit
+import AppKit
 
 // MARK: - Coordinator
 
 @MainActor
 final class GameCoordinator: ObservableObject {
-
+    
     enum Screen {
         case menu
         case teamSelectionSingle
-        case teamSelectionMulti
         case lobby
         case playing
         case results
@@ -29,18 +29,25 @@ final class GameCoordinator: ObservableObject {
     }
 
     @Published var screen: Screen = .menu
-    @Published var seatNames: [Int: String] = [:]       // lobby: seat raw → player name
-    @Published var mySeat: Int? = nil                   // lobby: my claimed seat
-    @Published var lobbyHostTeamID: String? = nil       // lobby: host's team pick
-    @Published var lobbyAwayTeamID: String? = nil       // lobby: away field player's pick
+    @Published var multiplayerMode: MPMode = .twoVsTwo  // chosen from the menu
+    @Published var mySeat: Int? = nil                   // lobby: my assigned seat
     @Published var lobbyStatus = ""                     // matchmaking progress line
     @Published var isKeeperRole = false                 // in-match: hide the formation bar
     @Published var isGamePaused = false                 // vs AI pause overlay
 
-    // Host-side lobby bookkeeping (players are GameKit gamePlayerIDs).
-    private var seatOwners: [Int: String] = [:]         // claimed seats (joiners only)
-    private var awayFieldTeamID: String? = nil
-    private var awayFieldFormation: Formation = .oneTwo
+    // Lobby / party state.
+    @Published var roomKey: String? = nil               // shown to the master, typed by a joiner
+    @Published var joinKeyField: String = ""            // bound to the "enter key" text field
+    @Published var isRoomMaster = false                 // I generated the key (host the room)
+    @Published var teammatePresent = false              // 2v2: my teammate has joined
+    @Published var teammateName: String = ""            // 2v2: my teammate's display name
+    @Published var battleStarted = false                // Battle tapped → searching opponents
+
+    // Host-side seating bookkeeping, keyed by GameKit gamePlayerID.
+    private var helloInfo: [String: (country: String, roomKey: String?)] = [:]
+    private var seatAssignment: [String: PeerSeat] = [:]
+    private var launchHomeTeamID: String? = nil
+    private var launchAwayTeamID: String? = nil
     @Published var feedbackText: String = ""
     @Published var finalHome = 0
     @Published var finalAway = 0
@@ -53,78 +60,129 @@ final class GameCoordinator: ObservableObject {
     @Published var homeStats: PlayerStats? = nil   // stats for the results screen
     @Published var coachRequested = false          // has the coach note been asked for?
     @Published var homeFormation: Formation = .oneTwo   // persists across matches
-
+    
     // World Cup team selection. In single player both pickers apply; in
     // multiplayer YOUR TEAM is yours and the rival's pick arrives over the
     // wire during the lobby handshake (overwriting awayWCTeam).
     @Published var homeWCTeam: WCTeam = WorldCupTeams.all[0]   // France
     @Published var awayWCTeam: WCTeam = WorldCupTeams.all[1]   // Argentina
-
+    
     private(set) var scene: GameScene?
     private let matchManager = GameKitMatchManager()
-
+    
     var isHosting: Bool { matchManager.isHost }
-
+    
     /// Pick a formation from the UI. Applied at the next reset in-game.
     func selectFormation(_ f: Formation) {
         homeFormation = f
         scene?.setHomeFormation(f)
     }
-
+    
     func startSinglePlayer() {
         matchManager.stop()
         launch(mode: .singlePlayer)
     }
-
+    
     // MARK: Multiplayer (GameKit)
 
-    /// Start Game Center automatching for a 2v2 (4-player) match. Once all
-    /// four connect, the elected host takes seat 0 and the others claim the
-    /// remaining seats; the match launches when every seat is filled.
-    func startMatchmaking() {
-        // Don't drop the player into the lobby if Game Center isn't signed
-        // in — findMatch would fail instantly. Prompt sign-in instead.
+    /// Enter the multiplayer lobby for the chosen format. The player picks
+    /// their country here, gathers a teammate (2v2), then taps Battle.
+    func startMultiplayer(mode: MPMode) {
+        // Don't enter the lobby if Game Center isn't signed in — matchmaking
+        // would fail instantly. Prompt sign-in instead.
         guard GameCenterManager.shared.isAuthenticated else {
             gcAlertShown = true
             GameCenterManager.shared.authenticate()   // re-present the sign-in sheet
             return
         }
+        matchManager.stop()          // clear any stale match from a prior session
         matchManager.delegate = self
+        multiplayerMode = mode
         resetLobby()
         screen = .lobby
-        beginSearch()
     }
 
-    /// Lobby "Search Again" after the search gave up with < 4 players.
-    func retryMatchmaking() {
+    /// Cycle the local player's country pick in the lobby (before matchmaking).
+    func cycleMyCountry(next: Bool) {
+        guard screen == .lobby, !battleStarted else { return }
+        let all = WorldCupTeams.all
+        guard !all.isEmpty,
+              let idx = all.firstIndex(where: { $0.id == homeWCTeam.id }) else { return }
+        let n = all.count
+        homeWCTeam = all[next ? (idx + 1) % n : (idx - 1 + n) % n]
+    }
+
+    /// 2v2 master: mint a room code and open a private room for a teammate.
+    func generateRoomKey() {
+        guard multiplayerMode == .twoVsTwo, roomKey == nil, !battleStarted else { return }
+        let key = GameKitMatchManager.makeRoomKey()
+        roomKey = key
+        isRoomMaster = true
+        lobbyStatus = L("lobby.waitingTeammate")
+        matchManager.hostRoom(mode: .twoVsTwo, key: key)
+    }
+
+    /// 2v2 teammate: join a master's room by typing their code.
+    func joinRoomByKey() {
+        let key = joinKeyField.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard multiplayerMode == .twoVsTwo, roomKey == nil, !battleStarted, key.count >= 3 else { return }
+        roomKey = key
+        isRoomMaster = false
+        joinKeyField = ""
+        lobbyStatus = L("lobby.joining")
+        matchManager.joinRoom(mode: .twoVsTwo, key: key)
+    }
+
+    /// Whether the Battle button is currently actionable.
+    var canTapBattle: Bool {
+        guard !battleStarted else { return false }
+        switch multiplayerMode {
+        case .oneVsOne: return true
+        case .twoVsTwo:
+            if isRoomMaster { return teammatePresent }
+            return roomKey == nil          // solo "quick" 2v2 (teamed with a stranger)
+        }
+    }
+
+    /// Start matchmaking for the opposing side.
+    func startBattle() {
+        guard screen == .lobby, canTapBattle else { return }
+        battleStarted = true
+        matchmakingFailed = false
+        lobbyStatus = L("lobby.searching")
+        beginBattleTimeout()
+        matchManager.startBattle(mode: multiplayerMode)
+    }
+
+    /// Retry after opponent search timed out (keeps a formed 2v2 party).
+    func retryBattle() {
         guard screen == .lobby, GameCenterManager.shared.isAuthenticated else { return }
-        beginSearch()
+        battleStarted = true
+        matchmakingFailed = false
+        lobbyStatus = L("lobby.searching")
+        beginBattleTimeout()
+        matchManager.startBattle(mode: multiplayerMode)
     }
 
-    // Keep automatching for up to `searchTimeout` seconds before showing the
-    // "couldn't find players" screen. GKMatchmaker can give up early when the
-    // pool is empty, so we quietly restart it until the countdown elapses.
+    // Give the opponent search `searchTimeout` seconds before offering retry.
     private static let searchTimeout: Double = 60
     private var searchTask: Task<Void, Never>? = nil
 
-    private func beginSearch() {
-        matchmakingFailed = false
-        lobbyStatus = L("lobby.searching")
+    private func beginBattleTimeout() {
         searchTask?.cancel()
         searchTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.searchTimeout * 1_000_000_000))
-            guard let self, !Task.isCancelled, self.screen == .lobby else { return }
+            guard let self, !Task.isCancelled,
+                  self.screen == .lobby, self.battleStarted else { return }
             self.failSearch()
         }
-        matchManager.findMatch()
     }
 
-    /// The countdown elapsed without a full table: stop searching and show the
-    /// retry/cancel screen.
     private func failSearch() {
         matchManager.cancelSearch()
         searchTask?.cancel()
         searchTask = nil
+        battleStarted = false
         matchmakingFailed = true
         lobbyStatus = L("lobby.noPlayers")
     }
@@ -143,94 +201,100 @@ final class GameCoordinator: ObservableObject {
     }
 
     private func resetLobby() {
-        seatNames = [:]
-        seatOwners = [:]
         mySeat = nil
-        lobbyHostTeamID = nil
-        lobbyAwayTeamID = nil
-        awayFieldTeamID = nil
-        awayFieldFormation = .oneTwo
+        roomKey = nil
+        joinKeyField = ""
+        isRoomMaster = false
+        teammatePresent = false
+        teammateName = ""
+        battleStarted = false
         peerConnected = false
         matchmakingFailed = false
         lobbyStatus = ""
+        helloInfo = [:]
+        seatAssignment = [:]
+        launchHomeTeamID = nil
+        launchAwayTeamID = nil
     }
 
-    /// Joiner: tap a free seat in the lobby.
-    func claimSeat(_ raw: Int) {
-        guard !isHosting, mySeat == nil, seatNames[raw] == nil else { return }
-        matchManager.sendToHost(.requestSeat(seat: raw, teamID: homeWCTeam.id,
-                                             formation: homeFormation.rawValue))
-    }
+    // MARK: Host-side seat assignment
 
-    /// May the local player change the given team's country right now?
-    /// Once seated, only that team's FIELD player (the captain) may. While
-    /// still searching (no seat yet), you may adjust your own pick, which is
-    /// shown in the HOME column until the host seats everyone.
-    func canEditTeam(home: Bool) -> Bool {
-        if let raw = mySeat, let seat = PeerSeat(rawValue: raw) {
-            return seat.isField && seat.isHome == home
+    /// Group the connected players into two balanced teams and hand out seats.
+    /// The elected host keeps `homeField`; its real teammate (same room key, or
+    /// a leftover solo) stays on the home side so the wire "home = host's team"
+    /// convention holds. Runs only once every player's `hello` has arrived.
+    private func tryAssignSeats() {
+        guard matchManager.isHost, mySeat == nil else { return }
+        let ids = matchManager.allPlayerIDs
+        guard ids.allSatisfy({ helloInfo[$0] != nil }) else { return }   // await all hellos
+
+        let map = computeSeatAssignment(ids: ids)
+        seatAssignment = map
+
+        let host = matchManager.localPlayerID
+        let awayFieldID = map.first(where: { $0.value == .awayField })?.key
+        let homeID = helloInfo[host]?.country ?? homeWCTeam.id
+        let awayID = awayFieldID.flatMap { helloInfo[$0]?.country }
+            ?? WorldCupTeams.all.first(where: { $0.id != homeID })?.id
+            ?? WorldCupTeams.all[1].id
+        launchHomeTeamID = homeID
+        launchAwayTeamID = awayID
+
+        let homeForm = homeFormation.rawValue
+        let awayForm = Formation.oneTwo.rawValue
+        for (pid, seat) in map {
+            if pid == host { mySeat = seat.rawValue }
+            else { matchManager.send(.seatAssigned(seat: seat.rawValue), to: [pid]) }
         }
-        return home && !peerConnected
+        matchManager.send(.startMatch(homeTeamID: homeID, awayTeamID: awayID,
+                                      homeFormation: homeForm, awayFormation: awayForm))
+        launchMultiplayer(homeTeamID: homeID, awayTeamID: awayID,
+                          homeFormationRaw: homeForm, awayFormationRaw: awayForm)
     }
 
-    /// Cycle a team's country in the lobby. Guarded by `canEditTeam`, so only
-    /// a captain (or your own pre-seat pick) can move it. Keepers cannot.
-    func changeTeamSelection(home: Bool, next: Bool) {
-        guard screen == .lobby, canEditTeam(home: home) else { return }
-        let all = WorldCupTeams.all
-        guard !all.isEmpty,
-              let idx = all.firstIndex(where: { $0.id == homeWCTeam.id }) else { return }
-        let n = all.count
-        homeWCTeam = all[next ? (idx + 1) % n : (idx - 1 + n) % n]
+    private func computeSeatAssignment(ids: [String]) -> [String: PeerSeat] {
+        let host = matchManager.localPlayerID
+        // A player's room key, flattened (nil for solo searchers).
+        func key(_ id: String) -> String? { helloInfo[id]?.roomKey ?? nil }
 
-        if let raw = mySeat, let seat = PeerSeat(rawValue: raw), seat.isField {
-            if seat.isHome {
-                // Seated host captain — reflect and re-broadcast directly.
-                lobbyHostTeamID = homeWCTeam.id
-                broadcastLobbyState()
-            } else {
-                // Seated away captain — show it locally, ask the host to record.
-                lobbyAwayTeamID = homeWCTeam.id
-                matchManager.sendToHost(.teamChange(seat: raw, teamID: homeWCTeam.id))
+        guard multiplayerMode == .twoVsTwo else {
+            // 1v1: host = homeField, the other player = awayField.
+            var map: [String: PeerSeat] = [host: .homeField]
+            for id in ids where id != host { map[id] = .awayField }
+            return map
+        }
+        // 2v2: keep the host's real teammate (same room key) on the home side.
+        var home: [String] = [host]
+        if let hostKey = key(host),
+           let mate = ids.first(where: { $0 != host && key($0) == hostKey }) {
+            home.append(mate)
+        }
+        if home.count < 2 {
+            // Host searched solo: pair it with a leftover, keeping any opposing
+            // party (a pair sharing a key) together on the away side.
+            let remaining = ids.filter { !home.contains($0) }
+            var keyGroups: [String: [String]] = [:]
+            for id in remaining {
+                if let k = key(id) { keyGroups[k, default: []].append(id) }
+            }
+            let awayPair = Set(keyGroups.values.first(where: { $0.count >= 2 })
+                .map { Array($0.prefix(2)) } ?? [])
+            if let mate = remaining.sorted().first(where: { !awayPair.contains($0) }) {
+                home.append(mate)
             }
         }
-        // Not seated yet: homeWCTeam is updated; the home column shows it via
-        // `lobbyHostTeamID ?? homeWCTeam.id`, and it travels with claimSeat.
-    }
-
-    /// The WCTeam currently shown for a lobby column (nil if the away team
-    /// hasn't been picked yet).
-    func lobbyTeam(home: Bool) -> WCTeam? {
-        let id = home ? (lobbyHostTeamID ?? homeWCTeam.id) : lobbyAwayTeamID
-        guard let id else { return nil }
-        return WorldCupTeams.team(named: id)
-    }
-
-    /// Host: broadcast the current lobby to everyone.
-    private func broadcastLobbyState() {
-        guard isHosting else { return }
-        let filled = seatNames.keys.sorted()
-        matchManager.send(.lobbyState(filledSeats: filled,
-                                      names: filled.map { seatNames[$0] ?? "?" },
-                                      hostTeamID: homeWCTeam.id,
-                                      awayTeamID: awayFieldTeamID))
-    }
-
-    /// Host: all four seats filled — tell everyone and launch.
-    private func startMatchIfReady() {
-        guard isHosting, seatNames.count == PeerSeat.allCases.count else { return }
-        let awayID = awayFieldTeamID ?? WorldCupTeams.all[1].id
-        matchManager.send(.startMatch(homeTeamID: homeWCTeam.id, awayTeamID: awayID,
-                                      homeFormation: homeFormation.rawValue,
-                                      awayFormation: awayFieldFormation.rawValue))
-        launchMultiplayer(homeTeamID: homeWCTeam.id, awayTeamID: awayID,
-                          homeFormationRaw: homeFormation.rawValue,
-                          awayFormationRaw: awayFieldFormation.rawValue)
+        let away = ids.filter { !home.contains($0) }.sorted()
+        var map: [String: PeerSeat] = [host: .homeField]
+        for id in home where id != host { map[id] = .homeKeeper }
+        if let f = away.first { map[f] = .awayField }
+        for id in away.dropFirst() { map[id] = .awayKeeper }
+        return map
     }
 
     /// Configure the scene for MY seat: my team is always the local `.home`.
     private func launchMultiplayer(homeTeamID: String, awayTeamID: String,
                                    homeFormationRaw: Int, awayFormationRaw: Int) {
+        endSearch()
         guard let seatRaw = mySeat, let seat = PeerSeat(rawValue: seatRaw) else { return }
         let myTeamID    = seat.isHome ? homeTeamID : awayTeamID
         let rivalTeamID = seat.isHome ? awayTeamID : homeTeamID
@@ -239,16 +303,20 @@ final class GameCoordinator: ObservableObject {
         homeWCTeam = WorldCupTeams.team(named: myTeamID) ?? homeWCTeam
         awayWCTeam = WorldCupTeams.team(named: rivalTeamID) ?? awayWCTeam
         homeFormation = myForm
-        isKeeperRole = !seat.isField
-        launch(mode: .multiplayer, seat: seat, rivalFormation: rivalForm)
+        // In 1v1 the sole player controls the whole team (keeper included), so
+        // the formation bar stays visible; only a 2v2 keeper hides it.
+        isKeeperRole = multiplayerMode.teamSize == 2 && !seat.isField
+        launch(mode: .multiplayer, seat: seat,
+               teamSize: multiplayerMode.teamSize, rivalFormation: rivalForm)
     }
 
     private func launch(mode: MatchMode, seat: PeerSeat = .homeField,
-                        rivalFormation: Formation? = nil) {
+                        teamSize: Int = 2, rivalFormation: Formation? = nil) {
         let s = GameScene(size: GameConfig.sceneSize)
         s.mode = mode
         s.isNetworkHost = mode == .multiplayer && matchManager.isHost
         s.localSeat = seat
+        s.teamSize = teamSize
         s.gameDelegate = self
         s.homeFormation = homeFormation   // carry the chosen shape into the new match
         if let rivalFormation { s.awayFormation = rivalFormation }
@@ -265,21 +333,21 @@ final class GameCoordinator: ObservableObject {
         if mode == .singlePlayer { isKeeperRole = false }
         screen = .playing
     }
-
+    
     // MARK: Pause (vs AI only)
-
+    
     func pauseGame() {
         guard scene?.mode == .singlePlayer, !isGamePaused else { return }
         isGamePaused = true
         scene?.setGamePaused(true)
     }
-
+    
     func resumeGame() {
         guard isGamePaused else { return }
         isGamePaused = false
         scene?.setGamePaused(false)
     }
-
+    
     /// Generate the coach's note on demand (after the player taps the button on
     /// the results screen). Kept off the match-finish path so nothing blocks or
     /// stutters the game — the on-device model only runs when explicitly asked.
@@ -295,7 +363,7 @@ final class GameCoordinator: ObservableObject {
             self.isGeneratingFeedback = false
         }
     }
-
+    
     func returnToMenu() {
         endSearch()
         matchManager.stop()
@@ -318,7 +386,7 @@ extension GameCoordinator: GameSceneDelegate {
             self.coachRequested = false
             self.isGeneratingFeedback = false
             self.screen = .results
-
+            
             // Book the match into the persistent profile (both modes) and,
             // for multiplayer, push the bests to the Game Center boards.
             let isMP = self.scene?.mode == .multiplayer
@@ -336,14 +404,14 @@ extension GameCoordinator: GameSceneDelegate {
             }
         }
     }
-
+    
     nonisolated func localPlayerCompletedWord(mistyped: Bool) {
         Task { @MainActor in
             guard let seat = self.mySeat, self.scene?.mode == .multiplayer else { return }
             self.matchManager.send(.wordCompleted(seat: seat, mistyped: mistyped))
         }
     }
-
+    
     nonisolated func formationChanged(to formation: Formation) {
         Task { @MainActor in
             self.homeFormation = formation
@@ -354,7 +422,7 @@ extension GameCoordinator: GameSceneDelegate {
             }
         }
     }
-
+    
     nonisolated func peerSend(_ message: PeerMessage) {
         Task { @MainActor in self.matchManager.send(message) }
     }
@@ -365,30 +433,36 @@ extension GameCoordinator: MatchManagerDelegate {
     nonisolated func matchStateChanged() {
         Task { @MainActor in
             self.peerConnected = self.matchManager.connectedRemoteCount > 0
-            if self.screen == .lobby, self.mySeat == nil {
-                let present = self.matchManager.connectedRemoteCount + 1
-                self.lobbyStatus = present < GameKitMatchManager.requiredPlayers
-                    ? "\(present)/\(GameKitMatchManager.requiredPlayers) — \(L("lobby.searching"))"
-                    : self.lobbyStatus
-            }
         }
     }
 
-    /// All four players connected: the elected host seats itself and starts
-    /// broadcasting lobby state; joiners wait for it, then claim seats.
+    /// 2v2: the room master's teammate connected — the party is formed.
+    nonisolated func partyReady() {
+        Task { @MainActor in
+            guard self.screen == .lobby, !self.battleStarted else { return }
+            self.teammatePresent = true
+            self.teammateName = self.matchManager.match?.players.first?.displayName
+                ?? L("lobby.teammate")
+            self.lobbyStatus = self.isRoomMaster
+                ? L("lobby.teammateJoined")
+                : L("lobby.waitingHost")
+        }
+    }
+
+    /// The full table connected: everyone announces their country + room key,
+    /// and the elected host groups players into balanced teams and seats them.
     nonisolated func matchReady() {
         Task { @MainActor in
             guard self.screen == .lobby else { return }
-            self.endSearch()          // full table — stop the countdown
+            self.endSearch()
             self.peerConnected = true
-            if self.matchManager.isHost {
-                self.mySeat = PeerSeat.homeField.rawValue
-                self.seatNames[PeerSeat.homeField.rawValue] =
-                    "\(self.matchManager.localDisplayName) (host)"
-                self.lobbyHostTeamID = self.homeWCTeam.id
-                self.broadcastLobbyState()
-            }
-            self.lobbyStatus = "\(self.seatNames.count)/4 \(L("lobby.waitingSeats"))"
+            self.battleStarted = true
+            self.lobbyStatus = L("lobby.starting")
+            self.helloInfo[self.matchManager.localPlayerID] =
+                (country: self.homeWCTeam.id, roomKey: self.matchManager.roomKey)
+            self.matchManager.send(.hello(country: self.homeWCTeam.id,
+                                          roomKey: self.matchManager.roomKey))
+            self.tryAssignSeats()
         }
     }
 
@@ -397,21 +471,14 @@ extension GameCoordinator: MatchManagerDelegate {
             if let error { NSLog("Matchmaking failed: \(error.localizedDescription)") }
             guard self.screen == .lobby else { return }
             if !GameCenterManager.shared.isAuthenticated {
-                // Not signed in — leave the lobby and prompt Game Center sign-in.
-                self.endSearch()
                 self.cancelLobby()
                 self.gcAlertShown = true
                 GameCenterManager.shared.authenticate()
                 return
             }
-            // Authenticated: GKMatchmaker gave up early (empty pool). Keep the
-            // waiting screen and quietly resume searching until the 60s
-            // countdown decides to surface the "no players" screen.
-            guard self.searchTask != nil, !self.matchmakingFailed else { return }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard self.searchTask != nil, self.screen == .lobby,
-                  !self.peerConnected else { return }
-            self.matchManager.findMatch()
+            // Authenticated but the search errored: only surface a failure while
+            // actively battling; a party search just quietly stops.
+            if self.battleStarted { self.failSearch() }
         }
     }
 
@@ -419,22 +486,25 @@ extension GameCoordinator: MatchManagerDelegate {
         Task { @MainActor in
             switch self.screen {
             case .lobby:
-                if self.matchManager.isHost {
-                    // Free the leaver's seat, then re-sync everyone.
-                    for (seat, owner) in self.seatOwners where owner == playerID {
-                        self.seatOwners[seat] = nil
-                        self.seatNames[seat] = nil
-                        if seat == PeerSeat.awayField.rawValue {
-                            self.awayFieldTeamID = nil
-                            self.lobbyAwayTeamID = nil
-                        }
+                if !self.battleStarted {
+                    // Party phase: my teammate dropped out.
+                    self.teammatePresent = false
+                    self.teammateName = ""
+                    if self.isRoomMaster, let key = self.roomKey {
+                        // Re-open the same room and keep waiting for a teammate.
+                        self.matchManager.hostRoom(mode: .twoVsTwo, key: key)
+                        self.roomKey = key
+                        self.isRoomMaster = true
+                        self.lobbyStatus = L("lobby.waitingTeammate")
+                    } else {
+                        // The master I joined left — clear my room membership.
+                        self.matchManager.stop()
+                        self.roomKey = nil
+                        self.lobbyStatus = ""
                     }
-                    self.broadcastLobbyState()
-                } else if wasHost {
-                    // Lost the host — abandon this match and re-search.
-                    self.matchManager.stop()
-                    self.resetLobby()
-                    self.startMatchmaking()
+                } else if wasHost && !self.matchManager.isHost {
+                    // Lost the elected host before the match launched — bail out.
+                    self.failSearch()
                 }
             case .playing:
                 guard self.scene?.mode == .multiplayer else { break }
@@ -442,9 +512,9 @@ extension GameCoordinator: MatchManagerDelegate {
                     // The sim owner is gone — the match can't continue.
                     self.scene?.peerDidDisconnect()
                 } else if self.matchManager.isHost {
-                    // A joiner quit: promote their seat to AI and play on.
-                    if let seat = self.seatOwners.first(where: { $0.value == playerID })?.key {
-                        self.scene?.seatDidDisconnect(seatRaw: seat)
+                    // A player quit: promote their seat to AI and play on.
+                    if let seat = self.seatAssignment[playerID] {
+                        self.scene?.seatDidDisconnect(seatRaw: seat.rawValue)
                     }
                 }
             default:
@@ -457,53 +527,15 @@ extension GameCoordinator: MatchManagerDelegate {
         Task { @MainActor in
             switch message {
 
-                // ---- Lobby ----
-            case .requestSeat(let seat, let teamID, let formation):
-                guard self.matchManager.isHost, self.screen == .lobby,
-                      PeerSeat(rawValue: seat) != nil, self.seatNames[seat] == nil,
-                      !self.seatOwners.values.contains(playerID) else {   // one seat per player
-                    self.matchManager.send(.seatDenied(seat: seat), to: [playerID])
-                    break
-                }
-                self.seatOwners[seat] = playerID
-                self.seatNames[seat] = self.matchManager.displayName(for: playerID)
-                if seat == PeerSeat.awayField.rawValue {
-                    self.awayFieldTeamID = teamID
-                    self.lobbyAwayTeamID = teamID
-                    self.awayFieldFormation = Formation(rawValue: formation) ?? .oneTwo
-                }
-                self.matchManager.send(.seatAssigned(seat: seat), to: [playerID])
-                self.broadcastLobbyState()
-                self.startMatchIfReady()
-
-            case .teamChange(let seat, let teamID):
-                // Only the seated away captain may change the away country.
-                guard self.matchManager.isHost, self.screen == .lobby,
-                      seat == PeerSeat.awayField.rawValue,
-                      self.seatOwners[seat] == playerID,
-                      WorldCupTeams.team(named: teamID) != nil else { break }
-                self.awayFieldTeamID = teamID
-                self.lobbyAwayTeamID = teamID
-                self.broadcastLobbyState()
-
-            case .lobbyState(let filled, let names, let hostTeamID, let awayTeamID):
-                guard !self.matchManager.isHost, self.screen == .lobby else { break }
-                var map: [Int: String] = [:]
-                for (i, seat) in filled.enumerated() where i < names.count {
-                    map[seat] = names[i]
-                }
-                self.seatNames = map
-                self.lobbyHostTeamID = hostTeamID
-                self.lobbyAwayTeamID = awayTeamID
-                if let seat = self.mySeat, map[seat] == nil { self.mySeat = nil }
-                self.lobbyStatus = "\(map.count)/4 \(L("lobby.waitingSeats"))"
+                // ---- Lobby / seating ----
+            case .hello(let country, let roomKey):
+                guard self.matchManager.isHost, self.screen == .lobby else { break }
+                self.helloInfo[playerID] = (country: country, roomKey: roomKey)
+                self.tryAssignSeats()
 
             case .seatAssigned(let seat):
                 guard !self.matchManager.isHost, self.screen == .lobby else { break }
                 self.mySeat = seat
-
-            case .seatDenied:
-                break   // lobbyState already shows who got there first
 
             case .startMatch(let homeTeamID, let awayTeamID, let homeF, let awayF):
                 guard !self.matchManager.isHost, self.screen == .lobby, self.mySeat != nil else { break }
@@ -553,14 +585,14 @@ extension GameCoordinator: MatchManagerDelegate {
 
 struct SpriteHostView: NSViewRepresentable {
     let scene: GameScene
-
+    
     func makeNSView(context: Context) -> SKView {
         let view = SKView(frame: .zero)
         view.ignoresSiblingOrder = true
         view.presentScene(scene)
         return view
     }
-
+    
     func updateNSView(_ nsView: SKView, context: Context) {
         if nsView.scene !== scene { nsView.presentScene(scene) }
         // Grab keyboard focus so the scene receives keyDown events.
@@ -573,7 +605,7 @@ struct SpriteHostView: NSViewRepresentable {
 struct ContentView: View {
     @EnvironmentObject var coordinator: GameCoordinator
     @ObservedObject private var settings = SettingsStore.shared   // re-render on language change
-
+    
     var body: some View {
         ZStack {
             Image("game-main-bg")
@@ -587,8 +619,6 @@ struct ContentView: View {
                 MenuView()
             case .teamSelectionSingle:
                 TeamSelectionView(isMultiplayer: false)
-            case .teamSelectionMulti:
-                TeamSelectionView(isMultiplayer: true)
             case .lobby:
                 LobbyView()
             case .playing:
@@ -617,11 +647,11 @@ struct ContentView: View {
             Text(L("gc.needSignInDetail"))
         }
     }
-
+    
     private var scrimOpacity: Double {
         switch coordinator.screen {
         case .menu:    0.30
-        case .teamSelectionSingle, .teamSelectionMulti: 0.25
+        case .teamSelectionSingle: 0.25
         case .lobby:   0.55
         case .playing: 0.75
         case .results: 0.55
@@ -633,7 +663,7 @@ struct ContentView: View {
 /// Back arrow used by the profile / leaderboard / settings / how-to screens.
 struct BackButton: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         Button {
             coordinator.screen = .menu
@@ -649,7 +679,7 @@ struct BackButton: View {
 struct TopBar: View {
     @EnvironmentObject var coordinator: GameCoordinator
     @ObservedObject private var gameCenter = GameCenterManager.shared
-
+    
     var body: some View {
         HStack {
             // Profile chip → Profile screen.
@@ -657,7 +687,7 @@ struct TopBar: View {
                 HStack(alignment: .center, spacing: 5) {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 24))
-
+                    
                     Text(gameCenter.playerName)
                         .font(.custom("Silom", size: 16))
                         .lineLimit(1)
@@ -674,9 +704,9 @@ struct TopBar: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
-
+            
             Spacer()
-
+            
             // Trophy → Leaderboards.
             Button(action: { coordinator.screen = .leaderboard }) {
                 Circle()
@@ -691,7 +721,7 @@ struct TopBar: View {
                     )
             }
             .buttonStyle(.plain)
-
+            
             // Gear → Settings.
             Button(action: { coordinator.screen = .settings }) {
                 Circle()
@@ -715,7 +745,7 @@ struct TopBar: View {
 
 struct MenuView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 22) {
             Text(L("menu.title"))
@@ -724,20 +754,26 @@ struct MenuView: View {
             Text(L("menu.tagline"))
                 .font(.system(.title3, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
-
+            
             VStack(spacing: 14) {
                 menuButton(L("menu.single")) {
                     coordinator.screen = .teamSelectionSingle
                 }
-                menuButton(L("menu.multi")) {
-                    coordinator.screen = .teamSelectionMulti
+                menuButton(L("menu.multi1v1")) {
+                    coordinator.startMultiplayer(mode: .oneVsOne)
+                }
+                menuButton(L("menu.multi2v2")) {
+                    coordinator.startMultiplayer(mode: .twoVsTwo)
                 }
                 menuButton(L("menu.howto")) {
                     coordinator.screen = .howToPlay
                 }
+                menuButton(L("EXIT")) {
+                    NSApplication.shared.terminate(nil)
+                }
             }
             .padding(.top, 12)
-
+            
             Text(L("menu.hint"))
                 .multilineTextAlignment(.center)
                 .font(.system(size: 12, design: .monospaced))
@@ -746,7 +782,7 @@ struct MenuView: View {
         }
         .padding(40)
     }
-
+    
     private func menuButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
@@ -762,20 +798,20 @@ struct MenuView: View {
 
 struct TeamSelectionView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     let isMultiplayer: Bool
-
+    
     @State private var selectedTeam: WCTeam?
     @State private var aiTeam: WCTeam?
-
+    
     private let columns = Array(
         repeating: GridItem(.fixed(170), spacing: 20),
         count: 3
     )
-
+    
     var body: some View {
         VStack(spacing: 28) {
-
+            
             ZStack {
                 VStack(spacing: 8) {
                     Text(isMultiplayer ? "Multiplayer Match Setup" : "Single Player Match Setup")
@@ -783,21 +819,21 @@ struct TeamSelectionView: View {
                         .foregroundStyle(.yellow)
                         .multilineTextAlignment(.center)
                         .textCase(.uppercase)
-
+                    
                     Text("Choose Your Nationality")
                         .font(.title)
                         .fontWeight(.semibold)
                         .foregroundStyle(.white)
-
+                    
                     Text(isMultiplayer
                          ? "Pick the nationality you want to play as, then find a match on Game Center."
                          : "Pick the nationality you want to play as. The AI will automatically choose a different team.")
-                        .font(.body)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
+                    .font(.body)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
                 }
-
+                
                 HStack {
                     Button {
                         coordinator.screen = .menu
@@ -807,22 +843,22 @@ struct TeamSelectionView: View {
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
-
+                    
                     Spacer()
                 }
             }
             .padding(.horizontal)
-
+            
             Spacer()
-
+            
             LazyVGrid(columns: columns, spacing: 18) {
-
+                
                 ForEach(WorldCupTeams.all.sorted { $0.name < $1.name }) { team in
-
+                    
                     Button {
                         selectedTeam = team
                         coordinator.homeWCTeam = team
-
+                        
                         guard !isMultiplayer else { return }
                         let opponents = WorldCupTeams.all.filter {
                             $0.id != team.id
@@ -833,16 +869,16 @@ struct TeamSelectionView: View {
                             aiTeam = randomOpponent
                             coordinator.awayWCTeam = randomOpponent
                         }
-
+                        
                     } label: {
-
+                        
                         ZStack(alignment: .topTrailing) {
-
+                            
                             VStack(spacing: 8) {
-
+                                
                                 Text(team.flag)
                                     .font(.system(size: 48))
-
+                                
                                 Text(team.name)
                                     .font(.system(size: 14,
                                                   weight: .bold,
@@ -867,7 +903,7 @@ struct TeamSelectionView: View {
                                         lineWidth: selectedTeam?.id == team.id ? 3 : 1
                                     )
                             )
-
+                            
                             if selectedTeam?.id == team.id {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 24))
@@ -879,83 +915,79 @@ struct TeamSelectionView: View {
                     .buttonStyle(.plain)
                 }
             }
-
+            
             if !isMultiplayer {
                 HStack {
                     // MARK: Player
-
+                    
                     VStack(spacing: 12) {
-
+                        
                         Text(L("common.you"))
                             .font(.headline)
                             .foregroundColor(.white.opacity(0.8))
-
+                        
                         if let selectedTeam {
-
+                            
                             VStack {
                                 Text(selectedTeam.flag)
                                     .font(.system(size: 60))
-
+                                
                                 Text(selectedTeam.name)
                                     .font(.title3.bold())
                                     .foregroundColor(.white)
                             }
-
+                            
                         } else {
                             Text("Waiting...")
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
-
+                    
                     VStack {
                         Spacer()
-
+                        
                         Text("VS")
                             .font(.system(size: 28,
                                           weight: .black,
                                           design: .monospaced))
                             .foregroundColor(.yellow)
-
+                        
                         Spacer()
                     }
                     .frame(width: 60)
-
+                    
                     // MARK: AI
-
+                    
                     VStack(spacing: 12) {
-
+                        
                         Text(L("common.ai"))
                             .font(.headline)
                             .foregroundColor(.white.opacity(0.8))
-
+                        
                         if let aiTeam {
-
+                            
                             VStack {
                                 Text(aiTeam.flag)
                                     .font(.system(size: 60))
-
+                                
                                 Text(aiTeam.name)
                                     .font(.title3.bold())
                                     .foregroundColor(.white)
                             }
-
+                            
                         } else {
-
+                            
                             Text("Waiting...")
                                 .foregroundColor(.white.opacity(0.6))
                         }
                     }
                 }
             }
-
+            
             if isMultiplayer ? selectedTeam != nil : aiTeam != nil {
 
                 Button {
-                    if isMultiplayer {
-                        coordinator.startMatchmaking()
-                    } else {
-                        coordinator.startSinglePlayer()
-                    }
+                    coordinator.startSinglePlayer()
                 } label: {
 
                     Text(isMultiplayer ? "Find Match" : "Start Match")
@@ -975,153 +1007,200 @@ struct TeamSelectionView: View {
     }
 }
 
-/// 2v2 waiting room over Game Center. The elected host owns the top-left
-/// seat; joiners tap a free seat to claim it. The match starts automatically
-/// when all four are taken.
+/// Pre-match lobby. The player picks their country here. In 2v2 they gather a
+/// teammate first (the master mints a key; the teammate types it), then tap
+/// Battle to matchmake a balanced opposing side. 1v1 just taps Battle.
 struct LobbyView: View {
     @EnvironmentObject var coordinator: GameCoordinator
 
+    private var is2v2: Bool { coordinator.multiplayerMode == .twoVsTwo }
+
     var body: some View {
         VStack(spacing: 18) {
-            Text(L("lobby.title"))
-                .font(.system(size: 28, weight: .heavy, design: .monospaced))
+            Text(is2v2 ? L("lobby.title2v2") : L("lobby.title1v1"))
+                .font(.system(size: 26, weight: .heavy, design: .monospaced))
                 .foregroundColor(.yellow)
 
-            HStack(spacing: 26) {
-                teamColumn(home: true,  seats: [.homeField, .homeKeeper])
-                Text("VS")
-                    .font(.system(size: 20, weight: .black, design: .monospaced))
-                    .foregroundColor(.white)
-                teamColumn(home: false, seats: [.awayField, .awayKeeper])
-            }
+            countryPicker
 
-            HStack(spacing: 10) {
-                if !coordinator.matchmakingFailed {
-                    ProgressView().controlSize(.small)
-                }
-                Text(statusLine)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(coordinator.matchmakingFailed
-                                     ? .orange : .white.opacity(0.65))
-            }
-            .padding(.top, 4)
+            if is2v2 { partySection }
 
-            Text(L("lobby.hint"))
-                .multilineTextAlignment(.center)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.4))
+            if coordinator.battleStarted {
+                searchingRow
+            } else if !coordinator.matchmakingFailed {
+                battleButton
+            }
 
             if coordinator.matchmakingFailed {
-                Button(action: { coordinator.retryMatchmaking() }) {
-                    Text(L("lobby.retry"))
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .frame(width: 200, height: 40)
-                        .background(Color.yellow.opacity(0.15))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 1.5))
-                        .foregroundColor(.yellow)
+                Text(L("lobby.noPlayers"))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.orange)
+                actionButton(L("lobby.retry"), filled: true) { coordinator.retryBattle() }
+            }
+
+            actionButton(L("lobby.cancel"), filled: false) { coordinator.cancelLobby() }
+        }
+        .padding(36)
+        .frame(maxWidth: 560)
+    }
+
+    // MARK: My country
+
+    private var countryPicker: some View {
+        VStack(spacing: 8) {
+            Text(L("lobby.yourCountry"))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.6))
+            HStack(spacing: 16) {
+                arrow("‹") { coordinator.cycleMyCountry(next: false) }
+                    .disabled(coordinator.battleStarted)
+                VStack(spacing: 4) {
+                    Text(coordinator.homeWCTeam.flag).font(.system(size: 40))
+                    Text(coordinator.homeWCTeam.name.uppercased())
+                        .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                .frame(minWidth: 150)
+                arrow("›") { coordinator.cycleMyCountry(next: true) }
+                    .disabled(coordinator.battleStarted)
+            }
+        }
+    }
+
+    // MARK: 2v2 party
+
+    private var partySection: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 14) {
+                playerSlot(name: L("lobby.you"), filled: true)
+                Text("+").font(.system(size: 20, weight: .black, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
+                playerSlot(name: coordinator.teammatePresent ? coordinator.teammateName
+                                                             : L("lobby.waitingTeammateShort"),
+                           filled: coordinator.teammatePresent)
+            }
+
+            if !coordinator.battleStarted {
+                if let key = coordinator.roomKey {
+                    roomKeyDisplay(key)
+                } else {
+                    roomJoinControls
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func playerSlot(name: String, filled: Bool) -> some View {
+        Text(name)
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .foregroundColor(filled ? .green : .white.opacity(0.45))
+            .lineLimit(1)
+            .frame(width: 150, height: 46)
+            .background(Color.white.opacity(0.05))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(filled ? Color.green.opacity(0.7) : Color.white.opacity(0.2), lineWidth: 1.4))
+    }
+
+    /// Master view: show the code to share, plus the waiting status.
+    private func roomKeyDisplay(_ key: String) -> some View {
+        VStack(spacing: 6) {
+            Text(coordinator.isRoomMaster ? L("lobby.shareKey") : L("lobby.joinedRoom"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.white.opacity(0.6))
+            Text(key)
+                .font(.system(size: 30, weight: .black, design: .monospaced))
+                .tracking(8)
+                .foregroundColor(.yellow)
+                .padding(.horizontal, 20).padding(.vertical, 6)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 1.5))
+        }
+    }
+
+    /// Not-yet-in-a-room view: generate a key, or type someone else's.
+    private var roomJoinControls: some View {
+        VStack(spacing: 10) {
+            actionButton(L("lobby.generateKey"), filled: true) { coordinator.generateRoomKey() }
+            Text(L("lobby.or"))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(.white.opacity(0.4))
+            HStack(spacing: 8) {
+                TextField(L("lobby.enterKey"), text: $coordinator.joinKeyField)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .frame(width: 150, height: 38)
+                    .background(Color.white.opacity(0.08))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cyan.opacity(0.7), lineWidth: 1.4))
+                    .onSubmit { coordinator.joinRoomByKey() }
+                Button(action: { coordinator.joinRoomByKey() }) {
+                    Text(L("lobby.join"))
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .frame(width: 74, height: 38)
+                        .background(Color.cyan.opacity(0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cyan, lineWidth: 1.4))
+                        .foregroundColor(.cyan)
                 }
                 .buttonStyle(.plain)
             }
-
-            Button(action: { coordinator.cancelLobby() }) {
-                Text(L("lobby.cancel"))
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .frame(width: 200, height: 40)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 1.5))
-                    .foregroundColor(.yellow)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(40)
-    }
-
-    private var statusLine: String {
-        let filled = coordinator.seatNames.count
-        if coordinator.matchmakingFailed { return L("lobby.noPlayers") }
-        if !coordinator.peerConnected { return L("lobby.searching") }
-        if filled == PeerSeat.allCases.count { return L("lobby.starting") }
-        return "\(filled)/4 \(L("lobby.waitingSeats"))"
-    }
-
-    private func teamColumn(home: Bool, seats: [PeerSeat]) -> some View {
-        let team = coordinator.lobbyTeam(home: home)
-        let name = team?.name ?? (home ? coordinator.homeWCTeam.id : "— away —")
-        let canEdit = coordinator.canEditTeam(home: home)
-
-        return VStack(spacing: 10) {
-            Text(name.uppercased())
-                .font(.system(size: 13, weight: .heavy, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
-
-            // Country selector, right under the name. Interactive only for the
-            // captain of this team (or your own pick while still searching).
-            countrySelector(home: home, team: team, canEdit: canEdit)
-
-            ForEach(seats, id: \.rawValue) { seat in seatCard(seat) }
         }
     }
 
-    /// `‹  🏳  ›` picker. Arrows show only when `canEdit`; otherwise it's a
-    /// static flag so both countries are always visible to everyone.
-    private func countrySelector(home: Bool, team: WCTeam?, canEdit: Bool) -> some View {
-        HStack(spacing: 12) {
-            if canEdit {
-                teamArrow("‹") { coordinator.changeTeamSelection(home: home, next: false) }
-            }
-            Text(team?.flag ?? "🏳️")
-                .font(.system(size: 22))
-                .opacity(team == nil ? 0.4 : 1)
-            if canEdit {
-                teamArrow("›") { coordinator.changeTeamSelection(home: home, next: true) }
-            }
+    // MARK: Battle / status
+
+    private var battleButton: some View {
+        Button(action: { coordinator.startBattle() }) {
+            Text(L("lobby.battle"))
+                .font(.system(size: 18, weight: .black, design: .monospaced))
+                .textCase(.uppercase)
+                .frame(width: 240, height: 50)
+                .background(coordinator.canTapBattle ? Color.yellow : Color.yellow.opacity(0.2))
+                .foregroundColor(coordinator.canTapBattle ? .black : .white.opacity(0.4))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
         }
-        .frame(height: 30)
-        .padding(.horizontal, 12)
-        .background(canEdit ? Color.yellow.opacity(0.12) : Color.clear)
-        .overlay(RoundedRectangle(cornerRadius: 7)
-            .stroke(canEdit ? Color.yellow.opacity(0.8) : Color.clear, lineWidth: 1.2))
+        .buttonStyle(.plain)
+        .disabled(!coordinator.canTapBattle)
     }
 
-    private func teamArrow(_ glyph: String, action: @escaping () -> Void) -> some View {
+    private var searchingRow: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(coordinator.lobbyStatus.isEmpty ? L("lobby.searching") : coordinator.lobbyStatus)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: Small helpers
+
+    private func arrow(_ glyph: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(glyph)
-                .font(.system(size: 18, weight: .black, design: .monospaced))
+                .font(.system(size: 24, weight: .black, design: .monospaced))
                 .foregroundColor(.yellow)
-                .frame(width: 22, height: 22)
+                .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
     }
 
-    private func seatCard(_ seat: PeerSeat) -> some View {
-        let name = coordinator.seatNames[seat.rawValue]
-        let isMine = coordinator.mySeat == seat.rawValue
-        let claimable = !coordinator.isHosting && coordinator.mySeat == nil
-        && name == nil && coordinator.peerConnected
-
-        return Button(action: { coordinator.claimSeat(seat.rawValue) }) {
-            VStack(spacing: 3) {
-                Text(seat.roleLabel)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(isMine ? .yellow : .white.opacity(0.85))
-                Text(name ?? (claimable ? L("lobby.claim") : L("lobby.open")))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(name != nil ? .green : .white.opacity(0.45))
-                    .lineLimit(1)
-            }
-            .frame(width: 190, height: 52)
-            .background(isMine ? Color.yellow.opacity(0.15) : Color.white.opacity(0.05))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(isMine ? Color.yellow : (claimable ? Color.cyan : Color.white.opacity(0.2)),
-                        lineWidth: 1.4))
+    private func actionButton(_ title: String, filled: Bool,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .frame(width: 220, height: 40)
+                .background(filled ? Color.yellow.opacity(0.15) : Color.clear)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 1.5))
+                .foregroundColor(.yellow)
         }
         .buttonStyle(.plain)
-        .disabled(!claimable)
     }
 }
 
 struct PlayingView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 0) {
             if coordinator.isKeeperRole {
@@ -1140,7 +1219,7 @@ struct PlayingView: View {
                     SpriteHostView(scene: scene)
                         .aspectRatio(GameConfig.sceneSize.width / GameConfig.sceneSize.height, contentMode: .fit)
                 }
-
+                
                 // vs AI only: pause button, top-left corner.
                 if coordinator.scene?.mode == .singlePlayer && !coordinator.isGamePaused {
                     Button(action: { coordinator.pauseGame() }) {
@@ -1156,7 +1235,7 @@ struct PlayingView: View {
                     .buttonStyle(.plain)
                     .padding(12)
                 }
-
+                
                 if coordinator.scene?.mode == .multiplayer {
                     HStack {
                         Spacer()
@@ -1166,7 +1245,7 @@ struct PlayingView: View {
                             .padding(10)
                     }
                 }
-
+                
                 if coordinator.isGamePaused {
                     PauseOverlay()
                 }
@@ -1178,23 +1257,23 @@ struct PlayingView: View {
 /// Pause menu shown over the frozen pitch (vs AI only).
 struct PauseOverlay: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
-
+            
             VStack(spacing: 26) {
                 Text(L("pause.title"))
                     .font(.system(size: 26, weight: .heavy, design: .monospaced))
                     .foregroundColor(.white)
-
+                
                 Button(action: { coordinator.resumeGame() }) {
                     Text(L("pause.resume"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
-
+                
                 Button(action: { coordinator.returnToMenu() }) {
                     Text(L("pause.menu"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
@@ -1214,7 +1293,7 @@ struct PauseOverlay: View {
 /// where the three outfielders line up. Click a card, or use ← / → to cycle.
 struct FormationBar: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
@@ -1225,7 +1304,7 @@ struct FormationBar: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundColor(.cyan.opacity(0.7))
             }
-
+            
             ForEach(Formation.allCases, id: \.self) { f in
                 let selected = coordinator.homeFormation == f
                 Button(action: { coordinator.selectFormation(f) }) {
@@ -1255,12 +1334,12 @@ struct FormationBar: View {
 struct MiniFormation: View {
     let formation: Formation
     let selected: Bool
-
+    
     private func yNorm(_ lane: Lane) -> CGFloat {
         if formation == .oneOneOne { return 0.5 }          // stacked on the centre axis
         switch lane { case .top: return 0.24; case .middle: return 0.5; case .bottom: return 0.76 }
     }
-
+    
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -1286,7 +1365,7 @@ struct MiniFormation: View {
 
 struct ResultsView: View {
     @EnvironmentObject var coordinator: GameCoordinator
-
+    
     var body: some View {
         VStack(spacing: 18) {
             Text(L("results.fulltime"))
@@ -1295,20 +1374,20 @@ struct ResultsView: View {
             Text("\(coordinator.finalHome)  –  \(coordinator.finalAway)")
                 .font(.system(size: 56, weight: .bold, design: .monospaced))
                 .foregroundColor(.white)
-
+            
             if let hp = coordinator.finalHomePens, let ap = coordinator.finalAwayPens {
                 Text("(\(hp) – \(ap) \(L("results.penalties")))")
                     .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundColor(.yellow.opacity(0.85))
             }
-
+            
             if let stats = coordinator.homeStats {
                 StatsPanel(stats: stats)
             }
-
+            
             coachSection
                 .padding(.vertical, 4)
-
+            
             Button(action: { coordinator.returnToMenu() }) {
                 Text(L("results.back"))
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
@@ -1320,7 +1399,7 @@ struct ResultsView: View {
         }
         .padding(40)
     }
-
+    
     /// Either the "get coach analysis" button, a loading spinner, or the note.
     @ViewBuilder
     private var coachSection: some View {
@@ -1351,21 +1430,21 @@ struct ResultsView: View {
 /// Compact grid of the match statistics shown on the results screen.
 struct StatsPanel: View {
     let stats: PlayerStats
-
+    
     private var wpm: Int { Int(stats.averageWPM.rounded()) }
     private var accuracy: Int { Int((stats.accuracy * 100).rounded()) }
     private var fastest: String {
         stats.fastestWordSeconds.map { String(format: "%.1fs", $0) } ?? "—"
     }
-
+    
     private let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-
+    
     var body: some View {
         VStack(spacing: 10) {
             Text(L("results.stats"))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.5))
-
+            
             LazyVGrid(columns: columns, spacing: 14) {
                 stat("WPM", "\(wpm)")
                 stat("ACCURACY", "\(accuracy)%")
@@ -1383,7 +1462,7 @@ struct StatsPanel: View {
         .background(Color.white.opacity(0.05))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.15), lineWidth: 1))
     }
-
+    
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(spacing: 3) {
             Text(value)
@@ -1401,7 +1480,7 @@ struct StatsPanel: View {
 #Preview("Menu") {
     let coordinator = GameCoordinator()
     coordinator.screen = .menu
-
+    
     return ContentView()
         .environmentObject(coordinator)
 }
