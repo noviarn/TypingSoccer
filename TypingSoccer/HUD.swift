@@ -35,12 +35,9 @@ final class HUD: SKNode {
     private let rightSpeedLabel = SKLabelNode(fontNamed: "Menlo-Bold")
 
     private let sceneSize: CGSize
-    /// Settings-driven multiplier for HUD/word text (1.0…1.5).
-    private let textScale: CGFloat
 
-    init(sceneSize: CGSize, textScale: CGFloat = 1.0) {
+    init(sceneSize: CGSize) {
         self.sceneSize = sceneSize
-        self.textScale = max(1.0, min(1.5, textScale))
         super.init()
         build()
     }
@@ -52,26 +49,26 @@ final class HUD: SKNode {
 
         homeScoreLabel.horizontalAlignmentMode = .left
         homeScoreLabel.position = CGPoint(x: GameConfig.fieldInset, y: topY)
-        homeScoreLabel.fontSize = 26 * textScale
+        homeScoreLabel.fontSize = 26
         homeScoreLabel.fontColor = SKColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
         addChild(homeScoreLabel)
 
         awayScoreLabel.horizontalAlignmentMode = .right
         awayScoreLabel.position = CGPoint(x: sceneSize.width - GameConfig.fieldInset, y: topY)
-        awayScoreLabel.fontSize = 26 * textScale
+        awayScoreLabel.fontSize = 26
         awayScoreLabel.fontColor = SKColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
         addChild(awayScoreLabel)
 
         timerLabel.horizontalAlignmentMode = .center
         timerLabel.position = CGPoint(x: sceneSize.width / 2, y: topY)
-        timerLabel.fontSize = 26 * textScale
+        timerLabel.fontSize = 26
         timerLabel.fontColor = .white
         addChild(timerLabel)
 
         // Penalty shootout tally, just under the timer (hidden until needed).
         pensLabel.horizontalAlignmentMode = .center
         pensLabel.position = CGPoint(x: sceneSize.width / 2, y: topY - 26)
-        pensLabel.fontSize = 15 * textScale
+        pensLabel.fontSize = 15
         pensLabel.fontColor = SKColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
         pensLabel.zPosition = 50
         pensLabel.isHidden = true
@@ -87,17 +84,14 @@ final class HUD: SKNode {
         // Transient toast (formation changes, etc.) just under the HUD strip.
         toastLabel.horizontalAlignmentMode = .center
         toastLabel.position = CGPoint(x: sceneSize.width / 2, y: sceneSize.height - GameConfig.hudHeight - 18)
-        toastLabel.fontSize = 18 * textScale
+        toastLabel.fontSize = 18
         toastLabel.fontColor = SKColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
         toastLabel.zPosition = 60
         toastLabel.alpha = 0
         addChild(toastLabel)
 
-        // Word prompt (hidden until a duel starts) — sized to the text scale.
-        let promptW = 440 * textScale
-        let promptH = 68 * textScale
-        promptBg.path = CGPath(roundedRect: CGRect(x: -promptW / 2, y: -promptH / 2,
-                                                   width: promptW, height: promptH),
+        // Word prompt (hidden until a duel starts).
+        promptBg.path = CGPath(roundedRect: CGRect(x: -220, y: -34, width: 440, height: 68),
                                cornerWidth: 12, cornerHeight: 12, transform: nil)
         promptBg.fillColor = SKColor(white: 0, alpha: 0.65)
         promptBg.strokeColor = SKColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
@@ -109,14 +103,14 @@ final class HUD: SKNode {
 
         typedLabel.horizontalAlignmentMode = .left
         typedLabel.verticalAlignmentMode = .center
-        typedLabel.fontSize = 36 * textScale
+        typedLabel.fontSize = 36
         typedLabel.fontColor = SKColor(red: 0.3, green: 0.9, blue: 0.4, alpha: 1)
         typedLabel.zPosition = 41
         promptBg.addChild(typedLabel)
 
         remainLabel.horizontalAlignmentMode = .left
         remainLabel.verticalAlignmentMode = .center
-        remainLabel.fontSize = 36 * textScale
+        remainLabel.fontSize = 36
         remainLabel.fontColor = SKColor(white: 0.7, alpha: 1)
         remainLabel.zPosition = 41
         promptBg.addChild(remainLabel)
@@ -126,7 +120,7 @@ final class HUD: SKNode {
         for l in [enemyTypedLabel, enemyRemainLabel] {
             l.horizontalAlignmentMode = .left
             l.verticalAlignmentMode = .center
-            l.fontSize = 15 * textScale
+            l.fontSize = 15
             l.zPosition = 41
             promptBg.addChild(l)
         }
@@ -221,7 +215,7 @@ final class HUD: SKNode {
     }
 
     func showStatus(_ text: String, fontSize: CGFloat = 54) {
-        statusLabel.fontSize = fontSize * textScale
+        statusLabel.fontSize = fontSize
         statusLabel.text = text
         statusLabel.isHidden = text.isEmpty
     }
@@ -256,12 +250,11 @@ final class HUD: SKNode {
         typedLabel.text = typed
         remainLabel.text = remaining
         // Lay out so the two labels read as one word, roughly centred.
-        let glyph = 21.0 * textScale   // approx glyph width at size 36 Menlo, scaled
         let full = typed + remaining
-        let totalWidth = CGFloat(full.count) * glyph
+        let totalWidth = CGFloat(full.count) * 21.0   // approx glyph width at size 36 Menlo
         let startX = -totalWidth / 2
-        typedLabel.position = CGPoint(x: startX, y: 7 * textScale)
-        remainLabel.position = CGPoint(x: startX + CGFloat(typed.count) * glyph, y: 7 * textScale)
+        typedLabel.position = CGPoint(x: startX, y: 7)
+        remainLabel.position = CGPoint(x: startX + CGFloat(typed.count) * 21.0, y: 7)
     }
 
     /// Update the rival's progress row on the current duel word: the letters
@@ -278,10 +271,10 @@ final class HUD: SKNode {
         lastEnemyCount = count
         enemyTypedLabel.text = String(word.prefix(count))
         enemyRemainLabel.text = String(word.suffix(word.count - count))
-        let glyph: CGFloat = 9.0 * textScale   // approx glyph width at size 15 Menlo, scaled
+        let glyph: CGFloat = 9.0   // approx glyph width at size 15 Menlo
         let startX = -CGFloat(word.count) * glyph / 2
-        enemyTypedLabel.position = CGPoint(x: startX, y: -20 * textScale)
-        enemyRemainLabel.position = CGPoint(x: startX + CGFloat(count) * glyph, y: -20 * textScale)
+        enemyTypedLabel.position = CGPoint(x: startX, y: -20)
+        enemyRemainLabel.position = CGPoint(x: startX + CGFloat(count) * glyph, y: -20)
     }
 
     func hidePrompt() {
