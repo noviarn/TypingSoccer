@@ -144,54 +144,38 @@ final class GameCoordinator: ObservableObject {
         }
     }
 
-    /// Start matchmaking for the opposing side.
+    /// Start matchmaking for the opposing side. The search now runs until the
+    /// player taps Cancel (or a match forms) — there is no automatic timeout.
     func startBattle() {
         guard screen == .lobby, canTapBattle else { return }
         battleStarted = true
         matchmakingFailed = false
         lobbyStatus = L("lobby.searching")
-        beginBattleTimeout()
         matchManager.startBattle(mode: multiplayerMode)
     }
 
-    /// Retry after opponent search timed out (keeps a formed 2v2 party).
+    /// Retry after a genuine matchmaking error (keeps a formed 2v2 party).
     func retryBattle() {
         guard screen == .lobby, GameCenterManager.shared.isAuthenticated else { return }
         battleStarted = true
         matchmakingFailed = false
         lobbyStatus = L("lobby.searching")
-        beginBattleTimeout()
         matchManager.startBattle(mode: multiplayerMode)
     }
 
-    // Give the opponent search `searchTimeout` seconds before offering retry.
-    private static let searchTimeout: Double = 60
-    private var searchTask: Task<Void, Never>? = nil
-
-    private func beginBattleTimeout() {
-        searchTask?.cancel()
-        searchTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.searchTimeout * 1_000_000_000))
-            guard let self, !Task.isCancelled,
-                  self.screen == .lobby, self.battleStarted else { return }
-            self.failSearch()
-        }
-    }
-
+    /// Stop the current search after a genuine error surfaced by GameKit. This
+    /// is NOT triggered by any timer — only by a real `matchFailed` callback —
+    /// so an in-progress search is never cancelled behind the player's back.
     private func failSearch() {
         matchManager.cancelSearch()
-        searchTask?.cancel()
-        searchTask = nil
         battleStarted = false
         matchmakingFailed = true
         lobbyStatus = L("lobby.noPlayers")
     }
 
-    /// A match connected, or we're leaving the lobby — stop the countdown.
-    private func endSearch() {
-        searchTask?.cancel()
-        searchTask = nil
-    }
+    /// A match connected, or we're leaving the lobby. Kept as a hook now that
+    /// there is no search countdown to tear down.
+    private func endSearch() { }
 
     func cancelLobby() {
         endSearch()
@@ -543,8 +527,8 @@ extension GameCoordinator: MatchManagerDelegate {
                                        homeFormationRaw: homeF, awayFormationRaw: awayF)
 
                 // ---- In-match traffic, routed into the scene ----
-                // GKMatch delivers `sendDataToAllPlayers` to every machine, so
-                // no host relay is needed (unlike the old Multipeer mesh).
+                // GKMatch delivers `sendData(toAllPlayers:)` to every machine,
+                // so no host relay is needed.
             case .formationUpdate(let homeTeam, let raw):
                 self.scene?.applyRemoteFormationUpdate(homeTeamWire: homeTeam, raw: raw)
             case .typingProgress(let seat, let count):
