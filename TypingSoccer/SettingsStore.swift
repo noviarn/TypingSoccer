@@ -25,9 +25,17 @@ final class SettingsStore: ObservableObject {
     @Published var language: AppLanguage {
         didSet { defaults.set(language.rawValue, forKey: Keys.language) }
     }
-    /// 0…1 master volume for the game's sound effects. 0 = muted.
-    @Published var audioVolume: Double {
-        didSet { defaults.set(audioVolume, forKey: Keys.audio) }
+    /// 0…1 volume for looping background music. 0 = muted. Changing it updates
+    /// any track that's already playing.
+    @Published var musicVolume: Double {
+        didSet {
+            defaults.set(musicVolume, forKey: Keys.music)
+            Audio.refreshMusicVolume()
+        }
+    }
+    /// 0…1 volume for one-shot sound effects. 0 = muted.
+    @Published var sfxVolume: Double {
+        didSet { defaults.set(sfxVolume, forKey: Keys.sfx) }
     }
     /// 1.0…1.5 multiplier applied to the in-game word prompt and HUD text.
     @Published var textScale: Double {
@@ -37,13 +45,18 @@ final class SettingsStore: ObservableObject {
     private let defaults = UserDefaults.standard
     private enum Keys {
         static let language = "settings.language"
-        static let audio = "settings.audioVolume"
+        static let music = "settings.musicVolume"
+        static let sfx = "settings.sfxVolume"
+        static let legacyAudio = "settings.audioVolume"   // pre-split single slider
         static let textScale = "settings.textScale"
     }
 
     private init() {
         language = AppLanguage(rawValue: defaults.string(forKey: Keys.language) ?? "en") ?? .english
-        audioVolume = defaults.object(forKey: Keys.audio) as? Double ?? 0.7
+        // Migrate the old single "audio" slider into both channels the first time.
+        let legacy = defaults.object(forKey: Keys.legacyAudio) as? Double
+        musicVolume = defaults.object(forKey: Keys.music) as? Double ?? legacy ?? 0.6
+        sfxVolume   = defaults.object(forKey: Keys.sfx) as? Double ?? legacy ?? 0.8
         textScale = defaults.object(forKey: Keys.textScale) as? Double ?? 1.0
     }
 }
@@ -104,6 +117,8 @@ enum Localization {
         "settings.title": "SETTINGS",
         "settings.language": "LANGUAGE",
         "settings.audio": "AUDIO",
+        "settings.music": "MUSIC",
+        "settings.sfx": "SOUND FX",
         "settings.textSize": "TEXT SIZE",
 
         "profile.title": "PROFILE",
@@ -191,6 +206,8 @@ enum Localization {
         "settings.title": "PENGATURAN",
         "settings.language": "BAHASA",
         "settings.audio": "AUDIO",
+        "settings.music": "MUSIK",
+        "settings.sfx": "EFEK SUARA",
         "settings.textSize": "UKURAN TEKS",
 
         "profile.title": "PROFIL",

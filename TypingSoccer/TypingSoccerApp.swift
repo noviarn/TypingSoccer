@@ -17,6 +17,7 @@ struct TypingSoccerApp: App {
     init() {
         GameCenterManager.shared.authenticate()
         AssetPreloader.preloadAll()
+        Audio.lobbyMusic()          // start the menu track (initial screen is the menu)
     }
 
     var body: some Scene {

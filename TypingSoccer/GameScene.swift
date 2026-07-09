@@ -14,6 +14,7 @@
 
 import SpriteKit
 import AppKit
+import AVFoundation
 
 protocol GameSceneDelegate: AnyObject {
     /// Fired when the match ends, with the local player's stats and final score.
@@ -291,6 +292,7 @@ final class GameScene: SKScene {
         guard stage != .shootout else { return }   // no formations during penalties
         guard mode == .singlePlayer || localIsField else { return }   // keepers don't set shapes
         guard (pendingHomeFormation ?? homeFormation) != f else { return }
+        Audio.formation()               // the player switched shape
         switch phase {
         case .strategyPick, .countdown:
             homeFormation = f
@@ -491,6 +493,8 @@ final class GameScene: SKScene {
         duelResolved = false
         typing.begin(word: word)
         phase = .duel(kind)
+        // Two players collide and a battle begins (the kickoff has its own whistle).
+        if kind != .kickoff { Audio.battleStart() }
         offsideLineNode.isHidden = true      // hide the live line while play is frozen
         hud.showPrompt(typed: "", remaining: word)
         hud.updateEnemyProgress(word: word, typedCount: 0)
@@ -599,6 +603,7 @@ final class GameScene: SKScene {
             }
 
         case .interception:
+            Audio.battleEnd()                // the tackle/battle is decided
             let attacker = duelAttacker!     // current carrier
             let defender = duelDefender!     // interceptor
             if winner == attacker.team {
@@ -639,6 +644,8 @@ final class GameScene: SKScene {
 
     private func celebrateGoal(scoringTeam: Team) {
         phase = .goalScored(scoringTeam)
+        // Celebration voice ("SIUUUU") only when the local player's side scores.
+        if scoringTeam == .home { Audio.celebration() }
         hud.showStatus(scoringTeam == .home ? "GOAL!" : "RIVAL SCORES", fontSize: 48)
         run(.sequence([.wait(forDuration: 1.4), .run { [weak self] in
             guard let self else { return }
@@ -846,6 +853,7 @@ final class GameScene: SKScene {
         ballInFlight = true
         ball.isHidden = false
         phase = .goalScored(gk.team)   // neutral pause while the ball travels
+        Audio.saved()                  // keeper gets a hand to it
         hud.showStatus("SAVED!", fontSize: 44)
         let travel = SKAction.move(to: gk.position, duration: GameConfig.keeperCatchDuration)
         travel.timingMode = .easeOut
@@ -934,7 +942,7 @@ final class GameScene: SKScene {
             target = CGPoint(x: goalLineX + beyond, y: geometry.rect.midY + dir * (mouthHalf + 45))
         }
 
-        Audio.tick()   // "kick" — swap for a real SFX later
+        Audio.kick()   // the ball is struck at goal
         let kick = SKAction.move(to: target, duration: 0.45)
         kick.timingMode = .easeOut
         ball.run(kick) { [weak self] in
@@ -954,6 +962,7 @@ final class GameScene: SKScene {
         ballInFlight = true
         ball.isHidden = false
         phase = .goalScored(gk.team)   // neutral pause while the ball travels
+        Audio.saved()                  // keeper gets a hand to it
         hud.showStatus("SAVED!", fontSize: 44)
 
         let travel = SKAction.move(to: gk.position, duration: GameConfig.keeperCatchDuration)
@@ -992,11 +1001,12 @@ final class GameScene: SKScene {
         }
         if scoringTeam == .home { homeScore += 1; homeStats.goals += 1 } else { awayScore += 1 }
         hud.updateScore(home: homeScore, away: awayScore)
-        Audio.whistle()
+        Audio.goal()                    // ball hits the net
         celebrateGoal(scoringTeam: scoringTeam)
     }
 
     private func finishMiss(shooter: PlayerNode) {
+        Audio.miss()                    // shot sails wide (e.g. after a mistype)
         hud.showStatus("MISS!", fontSize: 44)
         run(.sequence([.wait(forDuration: 1.0), .run { [weak self] in
             guard let self else { return }
@@ -2106,22 +2116,179 @@ private extension CGPoint {
     func distance(to other: CGPoint) -> CGFloat { hypot(other.x - x, other.y - y) }
 }
 
-/// Lightweight audio using built-in macOS system sounds so the prototype
-/// makes noise without any bundled assets. Sounds are cached once instead
-/// of being re-created on every call, and the Settings volume slider is
-/// applied (0 mutes them entirely).
-enum Audio {
-    private static let whistleSound = NSSound(named: NSSound.Name("Submarine"))
-    private static let tickSound = NSSound(named: NSSound.Name("Tink"))
+// MARK: - Sound catalogue
 
-    private static func play(_ sound: NSSound?) {
-        let volume = Float(SettingsStore.shared.audioVolume)
-        guard volume > 0, let sound else { return }
+/// One sound-effect slot. Drop a matching audio file into the app bundle
+/// (any of .mp3/.m4a/.wav/.caf/.aiff) named `<fileBase>.<ext>` and it will be
+/// used automatically; until then a built-in macOS system sound stands in so
+/// every trigger still makes noise.
+enum SFX: CaseIterable {
+    case button          // any UI button tap
+    case whistle         // kickoff / half time / full time
+    case battleStart     // two players collide → a duel begins
+    case battleEnd       // a duel (interception) resolves
+    case kick            // the ball is struck at goal
+    case goal            // the ball hits the net
+    case saved           // the keeper catches the shot
+    case miss            // a shot sails wide (e.g. after a mistype)
+    case celebration     // goal celebration voice ("SIUUUU")
+    case formation       // the player changes formation
+    case pass            // a pass / generic cue
+
+    /// Base filename to look for in the bundle (no extension).
+    var fileBase: String {
+        switch self {
+        case .button:      return "sfx_button"
+        case .whistle:     return "sfx_whistle"
+        case .battleStart: return "sfx_battle_start"
+        case .battleEnd:   return "sfx_battle_end"
+        case .kick:        return "sfx_kick"
+        case .goal:        return "sfx_goal"
+        case .saved:       return "sfx_saved"
+        case .miss:        return "sfx_miss"
+        case .celebration: return "sfx_celebration"
+        case .formation:   return "sfx_formation"
+        case .pass:        return "sfx_pass"
+        }
+    }
+
+    /// macOS system sound used until a real file is supplied.
+    var systemFallback: String {
+        switch self {
+        case .button:      return "Tink"
+        case .whistle:     return "Submarine"
+        case .battleStart: return "Pop"
+        case .battleEnd:   return "Bottle"
+        case .kick:        return "Tink"
+        case .goal:        return "Glass"
+        case .saved:       return "Funk"
+        case .miss:        return "Basso"
+        case .celebration: return "Hero"
+        case .formation:   return "Morse"
+        case .pass:        return "Purr"
+        }
+    }
+}
+
+/// Background-music track. Same drop-in rule as `SFX`: add `<fileBase>.<ext>`
+/// to the bundle. Music has no system-sound fallback (it loops), so a missing
+/// file just means silence for that track.
+enum MusicTrack {
+    case lobby     // menus, lobby, results — everything outside a live match
+    case inGame    // during a match
+
+    var fileBase: String { self == .lobby ? "music_lobby" : "music_ingame" }
+}
+
+/// Loads and plays the game's music and sound effects. Files are looked up in
+/// the app bundle by name; SFX fall back to macOS system sounds when a file is
+/// absent. Music and effects have independent volumes (Settings), and 0 mutes.
+final class AudioManager {
+    static let shared = AudioManager()
+
+    private static let extensions = ["mp3", "m4a", "wav", "caf", "aif", "aiff"]
+
+    private var sfxPlayers: [String: AVAudioPlayer] = [:]   // cached, keyed by fileBase
+    private var systemSounds: [String: NSSound] = [:]
+    private var musicPlayer: AVAudioPlayer?
+    private var currentTrack: MusicTrack?
+
+    private func bundleURL(base: String) -> URL? {
+        for ext in Self.extensions {
+            if let url = Bundle.main.url(forResource: base, withExtension: ext) { return url }
+        }
+        return nil
+    }
+
+    // MARK: Sound effects
+
+    func play(_ sfx: SFX) {
+        let volume = Float(SettingsStore.shared.sfxVolume)
+        guard volume > 0 else { return }
+        if let url = bundleURL(base: sfx.fileBase) {
+            let player: AVAudioPlayer
+            if let cached = sfxPlayers[sfx.fileBase] {
+                player = cached
+            } else if let made = try? AVAudioPlayer(contentsOf: url) {
+                made.prepareToPlay()
+                sfxPlayers[sfx.fileBase] = made
+                player = made
+            } else {
+                playSystem(sfx, volume: volume); return
+            }
+            player.volume = volume
+            player.currentTime = 0
+            player.play()
+        } else {
+            playSystem(sfx, volume: volume)
+        }
+    }
+
+    private func playSystem(_ sfx: SFX, volume: Float) {
+        let name = sfx.systemFallback
+        let sound = systemSounds[name] ?? NSSound(named: NSSound.Name(name))
+        guard let sound else { return }
+        systemSounds[name] = sound
         sound.volume = volume
         if sound.isPlaying { sound.stop() }
         sound.play()
     }
 
-    static func whistle() { play(whistleSound) }
-    static func tick()    { play(tickSound) }
+    // MARK: Music
+
+    func playMusic(_ track: MusicTrack) {
+        guard currentTrack != track else { return }
+        currentTrack = track
+        musicPlayer?.stop()
+        guard let url = bundleURL(base: track.fileBase),
+              let player = try? AVAudioPlayer(contentsOf: url) else {
+            musicPlayer = nil
+            return
+        }
+        player.numberOfLoops = -1                     // loop forever
+        player.volume = Float(SettingsStore.shared.musicVolume)
+        player.prepareToPlay()
+        musicPlayer = player
+        if player.volume > 0 { player.play() }
+    }
+
+    func stopMusic() {
+        currentTrack = nil
+        musicPlayer?.stop()
+        musicPlayer = nil
+    }
+
+    /// Called when the music slider moves so a playing track updates live.
+    func refreshMusicVolume() {
+        let volume = Float(SettingsStore.shared.musicVolume)
+        musicPlayer?.volume = volume
+        if volume == 0 {
+            musicPlayer?.pause()
+        } else if let player = musicPlayer, !player.isPlaying {
+            player.play()
+        }
+    }
+}
+
+/// Thin facade over `AudioManager` — keeps call sites terse and readable.
+enum Audio {
+    // SFX
+    static func button()      { AudioManager.shared.play(.button) }
+    static func whistle()     { AudioManager.shared.play(.whistle) }
+    static func battleStart() { AudioManager.shared.play(.battleStart) }
+    static func battleEnd()   { AudioManager.shared.play(.battleEnd) }
+    static func kick()        { AudioManager.shared.play(.kick) }
+    static func goal()        { AudioManager.shared.play(.goal) }
+    static func saved()       { AudioManager.shared.play(.saved) }
+    static func miss()        { AudioManager.shared.play(.miss) }
+    static func celebration() { AudioManager.shared.play(.celebration) }
+    static func formation()   { AudioManager.shared.play(.formation) }
+    /// Legacy generic cue kept for existing pass/tap call sites.
+    static func tick()        { AudioManager.shared.play(.pass) }
+
+    // Music
+    static func lobbyMusic()  { AudioManager.shared.playMusic(.lobby) }
+    static func gameMusic()   { AudioManager.shared.playMusic(.inGame) }
+    static func stopMusic()   { AudioManager.shared.stopMusic() }
+    static func refreshMusicVolume() { AudioManager.shared.refreshMusicVolume() }
 }

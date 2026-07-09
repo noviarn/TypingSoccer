@@ -28,8 +28,16 @@ final class GameCoordinator: ObservableObject {
         case howToPlay
     }
 
-    @Published var screen: Screen = .menu
+    @Published var screen: Screen = .menu {
+        didSet { updateMusic() }
+    }
     @Published var multiplayerMode: MPMode = .twoVsTwo  // chosen from the menu
+
+    /// Background music follows the screen: the in-game track while a match is
+    /// live, the lobby track everywhere else (menu, lobby, results, settings…).
+    private func updateMusic() {
+        if screen == .playing { Audio.gameMusic() } else { Audio.lobbyMusic() }
+    }
     @Published var mySeat: Int? = nil                   // lobby: my assigned seat
     @Published var lobbyStatus = ""                     // matchmaking progress line
     @Published var isKeeperRole = false                 // in-match: hide the formation bar
@@ -144,54 +152,38 @@ final class GameCoordinator: ObservableObject {
         }
     }
 
-    /// Start matchmaking for the opposing side.
+    /// Start matchmaking for the opposing side. The search now runs until the
+    /// player taps Cancel (or a match forms) — there is no automatic timeout.
     func startBattle() {
         guard screen == .lobby, canTapBattle else { return }
         battleStarted = true
         matchmakingFailed = false
         lobbyStatus = L("lobby.searching")
-        beginBattleTimeout()
         matchManager.startBattle(mode: multiplayerMode)
     }
 
-    /// Retry after opponent search timed out (keeps a formed 2v2 party).
+    /// Retry after a genuine matchmaking error (keeps a formed 2v2 party).
     func retryBattle() {
         guard screen == .lobby, GameCenterManager.shared.isAuthenticated else { return }
         battleStarted = true
         matchmakingFailed = false
         lobbyStatus = L("lobby.searching")
-        beginBattleTimeout()
         matchManager.startBattle(mode: multiplayerMode)
     }
 
-    // Give the opponent search `searchTimeout` seconds before offering retry.
-    private static let searchTimeout: Double = 60
-    private var searchTask: Task<Void, Never>? = nil
-
-    private func beginBattleTimeout() {
-        searchTask?.cancel()
-        searchTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.searchTimeout * 1_000_000_000))
-            guard let self, !Task.isCancelled,
-                  self.screen == .lobby, self.battleStarted else { return }
-            self.failSearch()
-        }
-    }
-
+    /// Stop the current search after a genuine error surfaced by GameKit. This
+    /// is NOT triggered by any timer — only by a real `matchFailed` callback —
+    /// so an in-progress search is never cancelled behind the player's back.
     private func failSearch() {
         matchManager.cancelSearch()
-        searchTask?.cancel()
-        searchTask = nil
         battleStarted = false
         matchmakingFailed = true
         lobbyStatus = L("lobby.noPlayers")
     }
 
-    /// A match connected, or we're leaving the lobby — stop the countdown.
-    private func endSearch() {
-        searchTask?.cancel()
-        searchTask = nil
-    }
+    /// A match connected, or we're leaving the lobby. Kept as a hook now that
+    /// there is no search countdown to tear down.
+    private func endSearch() { }
 
     func cancelLobby() {
         endSearch()
@@ -543,8 +535,8 @@ extension GameCoordinator: MatchManagerDelegate {
                                        homeFormationRaw: homeF, awayFormationRaw: awayF)
 
                 // ---- In-match traffic, routed into the scene ----
-                // GKMatch delivers `sendDataToAllPlayers` to every machine, so
-                // no host relay is needed (unlike the old Multipeer mesh).
+                // GKMatch delivers `sendData(toAllPlayers:)` to every machine,
+                // so no host relay is needed.
             case .formationUpdate(let homeTeam, let raw):
                 self.scene?.applyRemoteFormationUpdate(homeTeamWire: homeTeam, raw: raw)
             case .typingProgress(let seat, let count):
@@ -683,7 +675,7 @@ struct TopBar: View {
     var body: some View {
         HStack {
             // Profile chip → Profile screen.
-            Button(action: { coordinator.screen = .profile }) {
+            Button(action: { Audio.button(); coordinator.screen = .profile }) {
                 HStack(alignment: .center, spacing: 5) {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 24))
@@ -708,7 +700,7 @@ struct TopBar: View {
             Spacer()
             
             // Trophy → Leaderboards.
-            Button(action: { coordinator.screen = .leaderboard }) {
+            Button(action: { Audio.button(); coordinator.screen = .leaderboard }) {
                 Circle()
                     .fill(Color(red: 109/255, green: 112/255, blue: 116/255))
                     .frame(width: 40, height: 40)
@@ -723,7 +715,7 @@ struct TopBar: View {
             .buttonStyle(.plain)
             
             // Gear → Settings.
-            Button(action: { coordinator.screen = .settings }) {
+            Button(action: { Audio.button(); coordinator.screen = .settings }) {
                 Circle()
                     .fill(Color(red: 109/255, green: 112/255, blue: 116/255))
                     .frame(width: 40, height: 40)
@@ -784,7 +776,7 @@ struct MenuView: View {
     }
     
     private func menuButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Audio.button(); action() }) {
             Text(title)
                 .font(.system(size: 16, weight: .bold, design: .monospaced))
                 .frame(width: 340, height: 46)
@@ -1133,7 +1125,7 @@ struct LobbyView: View {
                     .background(Color.white.opacity(0.08))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cyan.opacity(0.7), lineWidth: 1.4))
                     .onSubmit { coordinator.joinRoomByKey() }
-                Button(action: { coordinator.joinRoomByKey() }) {
+                Button(action: { Audio.button(); coordinator.joinRoomByKey() }) {
                     Text(L("lobby.join"))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .frame(width: 74, height: 38)
@@ -1149,7 +1141,7 @@ struct LobbyView: View {
     // MARK: Battle / status
 
     private var battleButton: some View {
-        Button(action: { coordinator.startBattle() }) {
+        Button(action: { Audio.button(); coordinator.startBattle() }) {
             Text(L("lobby.battle"))
                 .font(.system(size: 18, weight: .black, design: .monospaced))
                 .textCase(.uppercase)
@@ -1175,7 +1167,7 @@ struct LobbyView: View {
     // MARK: Small helpers
 
     private func arrow(_ glyph: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Audio.button(); action() }) {
             Text(glyph)
                 .font(.system(size: 24, weight: .black, design: .monospaced))
                 .foregroundColor(.yellow)
@@ -1186,7 +1178,7 @@ struct LobbyView: View {
 
     private func actionButton(_ title: String, filled: Bool,
                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Audio.button(); action() }) {
             Text(title)
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .frame(width: 220, height: 40)
@@ -1222,7 +1214,7 @@ struct PlayingView: View {
                 
                 // vs AI only: pause button, top-left corner.
                 if coordinator.scene?.mode == .singlePlayer && !coordinator.isGamePaused {
-                    Button(action: { coordinator.pauseGame() }) {
+                    Button(action: { Audio.button(); coordinator.pauseGame() }) {
                         Circle()
                             .fill(Color.white)
                             .frame(width: 38, height: 38)
@@ -1267,14 +1259,14 @@ struct PauseOverlay: View {
                     .font(.system(size: 26, weight: .heavy, design: .monospaced))
                     .foregroundColor(.white)
                 
-                Button(action: { coordinator.resumeGame() }) {
+                Button(action: { Audio.button(); coordinator.resumeGame() }) {
                     Text(L("pause.resume"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
                 
-                Button(action: { coordinator.returnToMenu() }) {
+                Button(action: { Audio.button(); coordinator.returnToMenu() }) {
                     Text(L("pause.menu"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
@@ -1414,7 +1406,7 @@ struct ResultsView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
         } else {
-            Button(action: { coordinator.requestCoachAnalysis() }) {
+            Button(action: { Audio.button(); coordinator.requestCoachAnalysis() }) {
                 Text(L("results.coach"))
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
                     .frame(width: 300, height: 44)
