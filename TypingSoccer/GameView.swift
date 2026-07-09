@@ -28,8 +28,16 @@ final class GameCoordinator: ObservableObject {
         case howToPlay
     }
 
-    @Published var screen: Screen = .menu
+    @Published var screen: Screen = .menu {
+        didSet { updateMusic() }
+    }
     @Published var multiplayerMode: MPMode = .twoVsTwo  // chosen from the menu
+
+    /// Background music follows the screen: the in-game track while a match is
+    /// live, the lobby track everywhere else (menu, lobby, results, settings…).
+    private func updateMusic() {
+        if screen == .playing { Audio.gameMusic() } else { Audio.lobbyMusic() }
+    }
     @Published var mySeat: Int? = nil                   // lobby: my assigned seat
     @Published var lobbyStatus = ""                     // matchmaking progress line
     @Published var isKeeperRole = false                 // in-match: hide the formation bar
@@ -667,7 +675,7 @@ struct TopBar: View {
     var body: some View {
         HStack {
             // Profile chip → Profile screen.
-            Button(action: { coordinator.screen = .profile }) {
+            Button(action: { Audio.button(); coordinator.screen = .profile }) {
                 HStack(alignment: .center, spacing: 5) {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 24))
@@ -692,7 +700,7 @@ struct TopBar: View {
             Spacer()
             
             // Trophy → Leaderboards.
-            Button(action: { coordinator.screen = .leaderboard }) {
+            Button(action: { Audio.button(); coordinator.screen = .leaderboard }) {
                 Circle()
                     .fill(Color(red: 109/255, green: 112/255, blue: 116/255))
                     .frame(width: 40, height: 40)
@@ -707,7 +715,7 @@ struct TopBar: View {
             .buttonStyle(.plain)
             
             // Gear → Settings.
-            Button(action: { coordinator.screen = .settings }) {
+            Button(action: { Audio.button(); coordinator.screen = .settings }) {
                 Circle()
                     .fill(Color(red: 109/255, green: 112/255, blue: 116/255))
                     .frame(width: 40, height: 40)
@@ -768,7 +776,7 @@ struct MenuView: View {
     }
     
     private func menuButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Audio.button(); action() }) {
             Text(title)
                 .font(.system(size: 16, weight: .bold, design: .monospaced))
                 .frame(width: 340, height: 46)
@@ -1117,7 +1125,7 @@ struct LobbyView: View {
                     .background(Color.white.opacity(0.08))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.cyan.opacity(0.7), lineWidth: 1.4))
                     .onSubmit { coordinator.joinRoomByKey() }
-                Button(action: { coordinator.joinRoomByKey() }) {
+                Button(action: { Audio.button(); coordinator.joinRoomByKey() }) {
                     Text(L("lobby.join"))
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                         .frame(width: 74, height: 38)
@@ -1133,7 +1141,7 @@ struct LobbyView: View {
     // MARK: Battle / status
 
     private var battleButton: some View {
-        Button(action: { coordinator.startBattle() }) {
+        Button(action: { Audio.button(); coordinator.startBattle() }) {
             Text(L("lobby.battle"))
                 .font(.system(size: 18, weight: .black, design: .monospaced))
                 .textCase(.uppercase)
@@ -1159,7 +1167,7 @@ struct LobbyView: View {
     // MARK: Small helpers
 
     private func arrow(_ glyph: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Audio.button(); action() }) {
             Text(glyph)
                 .font(.system(size: 24, weight: .black, design: .monospaced))
                 .foregroundColor(.yellow)
@@ -1170,7 +1178,7 @@ struct LobbyView: View {
 
     private func actionButton(_ title: String, filled: Bool,
                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button(action: { Audio.button(); action() }) {
             Text(title)
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .frame(width: 220, height: 40)
@@ -1206,7 +1214,7 @@ struct PlayingView: View {
                 
                 // vs AI only: pause button, top-left corner.
                 if coordinator.scene?.mode == .singlePlayer && !coordinator.isGamePaused {
-                    Button(action: { coordinator.pauseGame() }) {
+                    Button(action: { Audio.button(); coordinator.pauseGame() }) {
                         Circle()
                             .fill(Color.white)
                             .frame(width: 38, height: 38)
@@ -1251,14 +1259,14 @@ struct PauseOverlay: View {
                     .font(.system(size: 26, weight: .heavy, design: .monospaced))
                     .foregroundColor(.white)
                 
-                Button(action: { coordinator.resumeGame() }) {
+                Button(action: { Audio.button(); coordinator.resumeGame() }) {
                     Text(L("pause.resume"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
                 
-                Button(action: { coordinator.returnToMenu() }) {
+                Button(action: { Audio.button(); coordinator.returnToMenu() }) {
                     Text(L("pause.menu"))
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundColor(.white)
@@ -1398,7 +1406,7 @@ struct ResultsView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
         } else {
-            Button(action: { coordinator.requestCoachAnalysis() }) {
+            Button(action: { Audio.button(); coordinator.requestCoachAnalysis() }) {
                 Text(L("results.coach"))
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
                     .frame(width: 300, height: 44)

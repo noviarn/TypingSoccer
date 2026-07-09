@@ -38,12 +38,22 @@ struct SettingsView: View {
                     .frame(width: 200)
                 }
 
-                // Audio volume
-                settingRow(L("settings.audio")) {
+                // Background music volume
+                settingRow(L("settings.music")) {
                     HStack(spacing: 10) {
-                        Image(systemName: settings.audioVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        Image(systemName: settings.musicVolume == 0 ? "speaker.slash.fill" : "music.note")
                             .foregroundStyle(.white.opacity(0.7))
-                        Slider(value: $settings.audioVolume, in: 0...1)
+                        Slider(value: $settings.musicVolume, in: 0...1)
+                            .frame(width: 320)
+                    }
+                }
+
+                // Sound-effects volume
+                settingRow(L("settings.sfx")) {
+                    HStack(spacing: 10) {
+                        Image(systemName: settings.sfxVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .foregroundStyle(.white.opacity(0.7))
+                        Slider(value: $settings.sfxVolume, in: 0...1)
                             .frame(width: 320)
                     }
                 }
